@@ -26,3 +26,4 @@ tests/results/*.csv
 # IDE
 .vscode/
 .idea/
+.breaking_news_seen.txt

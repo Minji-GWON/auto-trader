@@ -2,7 +2,7 @@ name: 긴급 시장 뉴스 알림
 
 on:
   schedule:
-    # 매 15분마다 실행 (평일 한국 거래 시간대 집중)
+    # 매 15분마다 실행
     - cron: '*/15 * * * *'
   workflow_dispatch:  # 수동 실행 가능
 
@@ -25,9 +25,19 @@ jobs:
       - name: 의존성 설치
         run: pip install python-dotenv requests
 
+      # 이전 실행에서 저장한 "이미 전송한 URL 목록" 복원
+      - name: 중복 제거 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .breaking_news_seen.txt
+          key: breaking-news-seen-${{ github.run_id }}
+          restore-keys: |
+            breaking-news-seen-
+
       - name: 긴급 뉴스 알림 실행
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           NEWS_API_KEY:       ${{ secrets.NEWS_API_KEY }}
         run: python tests/breaking_news_alert.py
+      # 실행 후 업데이트된 URL 목록이 자동으로 캐시에 저장됨
