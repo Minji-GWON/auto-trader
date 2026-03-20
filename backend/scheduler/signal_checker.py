@@ -7,7 +7,7 @@
 """
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +26,107 @@ from backend.database import get_open_positions
 # 신호 체크에 필요한 최소 봉 수 (ma_long 기본 40 + 여유)
 _MIN_ROWS = 80
 
+# 거래량 비율 기준
+_VOL_STRONG  = 1.5   # 평균의 1.5배 이상 → 강한 거래량 확인
+_VOL_OK      = 0.8   # 평균의 0.8배 이상 → 정상
+_VOL_WEAK    = 0.5   # 평균의 0.5배 미만 → 거래량 부족 경고
+
+
+# ──────────────────────────────────────────
+# 시장 흐름 체크
+# ──────────────────────────────────────────
+
+def get_market_trend() -> dict:
+    """
+    코스피 지수 흐름을 분석해 시장 상태를 반환.
+    yfinance로 ^KS11 (KOSPI) 데이터를 가져옴.
+
+    Returns:
+        {
+            "status":      "강세" | "중립" | "약세" | "급락" | "알 수 없음"
+            "change_pct":  당일 등락률 (float)
+            "kospi":       현재 코스피 지수 (int)
+            "ma5":         5일 이평 (int)
+            "ma20":        20일 이평 (int)
+            "description": 한 줄 요약 (str)
+            "caution":     매수 자제 권고 여부 (bool)
+        }
+    """
+    try:
+        # KODEX 200 (069500): KOSPI200 추종 ETF — 지수 직접 조회보다 안정적
+        df = fetch_ohlcv(ticker="069500", period="3mo", source="auto")
+
+        if df is None or len(df) < 5:
+            return _unknown_trend("데이터 부족")
+
+        closes = df["close"].dropna()
+        today_close = float(closes.iloc[-1])
+        prev_close  = float(closes.iloc[-2])
+        change_pct  = round((today_close / prev_close - 1) * 100, 2)
+        ma5  = round(float(closes.tail(5).mean()),  0)
+        ma20 = round(float(closes.tail(20).mean()), 0)
+
+        if change_pct <= -2.5:
+            status = "급락"
+        elif change_pct <= -1.0 or today_close < ma20:
+            status = "약세"
+        elif change_pct >= 1.0 and today_close > ma5:
+            status = "강세"
+        else:
+            status = "중립"
+
+        return {
+            "status":      status,
+            "change_pct":  change_pct,
+            "kospi":       int(today_close),
+            "ma5":         int(ma5),
+            "ma20":        int(ma20),
+            "description": f"KODEX200 {today_close:,.0f}원 ({change_pct:+.2f}%) — 코스피 대용",
+            "caution":     status in ("급락", "약세"),
+        }
+    except Exception as e:
+        return _unknown_trend(str(e))
+
+
+def _unknown_trend(reason: str) -> dict:
+    return {
+        "status": "알 수 없음", "change_pct": 0.0,
+        "kospi": 0, "ma5": 0, "ma20": 0,
+        "description": f"시장 데이터 조회 실패: {reason}",
+        "caution": False,
+    }
+
+
+# ──────────────────────────────────────────
+# 거래량 판정
+# ──────────────────────────────────────────
+
+def _volume_grade(df: pd.DataFrame) -> tuple[float, str]:
+    """
+    오늘 거래량 / 20일 평균 거래량 비율과 등급 반환.
+    Returns: (ratio, grade)  grade: "강함" | "보통" | "약함" | "미확인"
+    """
+    try:
+        vol_col = "volume" if "volume" in df.columns else "거래량"
+        today_vol = float(df[vol_col].iloc[-1])
+        avg20_vol = float(df[vol_col].tail(21).iloc[:-1].mean())  # 오늘 제외 20일 평균
+        if avg20_vol == 0:
+            return 1.0, "미확인"
+        ratio = round(today_vol / avg20_vol, 2)
+        if ratio >= _VOL_STRONG:
+            grade = "강함"
+        elif ratio >= _VOL_OK:
+            grade = "보통"
+        else:
+            grade = "약함"
+        return ratio, grade
+    except Exception:
+        return 1.0, "미확인"
+
+
+# ──────────────────────────────────────────
+# 신호 체크
+# ──────────────────────────────────────────
 
 def check_signals_today(
     tickers: list[str],
@@ -41,10 +142,7 @@ def check_signals_today(
 ) -> list[dict]:
     """
     주어진 종목 리스트에 대해 오늘 신호를 체크하고 결과 리스트 반환.
-
-    Returns:
-        [{"ticker", "name", "signal", "price", "rsi", "date"}, ...]
-        signal이 HOLD인 종목은 포함되지 않음.
+    HOLD 종목은 제외. 거래량 비율/등급 포함.
     """
     results = []
 
@@ -55,18 +153,12 @@ def check_signals_today(
                 continue
 
             df = add_all_indicators(
-                df,
-                rsi_period=rsi_period,
-                bb_period=bb_period,
-                bb_std_dev=bb_std_dev,
-                ma_short=ma_short,
-                ma_long=ma_long,
+                df, rsi_period=rsi_period, bb_period=bb_period,
+                bb_std_dev=bb_std_dev, ma_short=ma_short, ma_long=ma_long,
             )
             df = generate_signals(
-                df,
-                rsi_oversold=rsi_oversold,
-                rsi_overbought=rsi_overbought,
-                swing_mode=swing_mode,
+                df, rsi_oversold=rsi_oversold,
+                rsi_overbought=rsi_overbought, swing_mode=swing_mode,
             )
             df = df.dropna()
             if df.empty:
@@ -77,15 +169,18 @@ def check_signals_today(
             if signal == "HOLD":
                 continue
 
+            vol_ratio, vol_grade = _volume_grade(df)
             code = ticker.split(".")[0]
             results.append({
-                "ticker": code,
-                "name": get_name(code),
-                "signal": signal,
-                "price": int(last["close"]),
-                "rsi": round(float(last["rsi"]), 1),
+                "ticker":     code,
+                "name":       get_name(code),
+                "signal":     signal,
+                "price":      int(last["close"]),
+                "rsi":        round(float(last["rsi"]), 1),
                 "bb_position": _bb_position(last),
-                "date": df.index[-1].strftime("%Y-%m-%d"),
+                "vol_ratio":  vol_ratio,
+                "vol_grade":  vol_grade,
+                "date":       df.index[-1].strftime("%Y-%m-%d"),
             })
         except Exception:
             pass
@@ -94,58 +189,74 @@ def check_signals_today(
 
 
 def _bb_position(row) -> str:
-    """현재가가 볼린저밴드 어느 위치인지 설명."""
-    close = row["close"]
-    upper = row["bb_upper"]
-    lower = row["bb_lower"]
-    mid = row["bb_middle"]
-    if close <= lower:
-        return "하단 이탈"
-    elif close >= upper:
-        return "상단 돌파"
-    elif close < mid:
-        return "중간 아래"
-    else:
-        return "중간 위"
+    close, upper, lower, mid = (
+        row["close"], row["bb_upper"], row["bb_lower"], row["bb_middle"]
+    )
+    if close <= lower:   return "하단 이탈"
+    if close >= upper:   return "상단 돌파"
+    if close < mid:      return "중간 아래"
+    return "중간 위"
 
 
-def send_signal_report(results: list[dict], notifier: TelegramNotifier = None):
-    """신호 결과를 텔레그램으로 전송."""
+# ──────────────────────────────────────────
+# 텔레그램 전송
+# ──────────────────────────────────────────
+
+def send_signal_report(
+    results: list[dict],
+    market_trend: dict = None,
+    notifier: TelegramNotifier = None,
+):
+    """신호 결과 + 시장 흐름을 텔레그램으로 전송."""
     if notifier is None:
         notifier = TelegramNotifier()
 
-    today = date.today().strftime("%Y\\-%m\\-%d")
-    buy_list = [r for r in results if r["signal"] == BUY]
-    sell_list = [r for r in results if r["signal"] == SELL]
+    from backend.notifier.telegram import _escape_md
 
+    today = date.today().strftime("%Y\\-%m\\-%d")
     lines = [f"📡 *일일 신호 체크* \\({today}\\)"]
 
-    from backend.notifier.telegram import _escape_md
+    # 시장 흐름 헤더
+    if market_trend:
+        status_emoji = {
+            "강세": "🟢", "중립": "⚪", "약세": "🟡", "급락": "🔴"
+        }.get(market_trend["status"], "❓")
+        desc = _escape_md(market_trend["description"])
+        status = _escape_md(market_trend["status"])
+        lines.append(f"\n{status_emoji} *시장: {status}*  {desc}")
+        if market_trend["caution"]:
+            lines.append("⚠️ 시장 약세 — 매수 신호라도 신중하게 판단하세요")
+
+    buy_list  = [r for r in results if r["signal"] == BUY]
+    sell_list = [r for r in results if r["signal"] == SELL]
+
+    def _vol_icon(grade: str) -> str:
+        return {"강함": "🔥", "보통": "✅", "약함": "⚠️", "미확인": "❓"}.get(grade, "")
 
     if buy_list:
         lines.append(f"\n🟢 *매수 신호 {len(buy_list)}개*")
         for r in buy_list:
+            vi = _vol_icon(r["vol_grade"])
             price_str = _escape_md(f"{r['price']:,}")
-            rsi_str = _escape_md(str(r['rsi']))
-            bb_str = _escape_md(r['bb_position'])
-            name_str = _escape_md(r['name'])
-            ticker_str = _escape_md(r['ticker'])
+            vol_str   = _escape_md(r["vol_grade"])
+            vol_ratio = _escape_md(str(r["vol_ratio"]))
             lines.append(
-                f"• {name_str} \\({ticker_str}\\)\n"
-                f"  현재가: {price_str}원  RSI: {rsi_str}  BB: {bb_str}"
+                f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
+                f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
+                f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)"
             )
 
     if sell_list:
         lines.append(f"\n🔴 *매도 신호 {len(sell_list)}개*")
         for r in sell_list:
+            vi = _vol_icon(r["vol_grade"])
             price_str = _escape_md(f"{r['price']:,}")
-            rsi_str = _escape_md(str(r['rsi']))
-            bb_str = _escape_md(r['bb_position'])
-            name_str = _escape_md(r['name'])
-            ticker_str = _escape_md(r['ticker'])
+            vol_str   = _escape_md(r["vol_grade"])
+            vol_ratio = _escape_md(str(r["vol_ratio"]))
             lines.append(
-                f"• {name_str} \\({ticker_str}\\)\n"
-                f"  현재가: {price_str}원  RSI: {rsi_str}  BB: {bb_str}"
+                f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
+                f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
+                f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)"
             )
 
     if not buy_list and not sell_list:
@@ -153,6 +264,10 @@ def send_signal_report(results: list[dict], notifier: TelegramNotifier = None):
 
     notifier.send_message("\n".join(lines))
 
+
+# ──────────────────────────────────────────
+# 보유 포지션 모니터링
+# ──────────────────────────────────────────
 
 def check_my_positions(
     rsi_oversold: float = 35,
@@ -164,15 +279,7 @@ def check_my_positions(
     ma_long: int = 40,
     swing_mode: bool = True,
 ) -> list[dict]:
-    """
-    내가 보유 중인 포지션을 조회해 현재 상태(수익률, 신호, 손절/익절 여부)를 반환.
-
-    Returns:
-        [{"position_id", "ticker", "name", "entry_price", "shares",
-          "entry_date", "current_price", "pnl_pct", "pnl_won",
-          "signal", "rsi", "stop_loss", "take_profit",
-          "alert": "정상"|"매도신호"|"손절"|"익절", ...}]
-    """
+    """보유 중인 포지션을 조회해 현재 상태(수익률, 신호, 손절/익절)를 반환."""
     positions = get_open_positions()
     if not positions:
         return []
@@ -195,12 +302,13 @@ def check_my_positions(
 
             last = df.iloc[-1]
             current_price = int(last["close"])
-            entry_price = pos["entry_price"]
-            shares = pos["shares"]
+            entry_price   = pos["entry_price"]
+            shares        = pos["shares"]
             pnl_pct = round((current_price / entry_price - 1) * 100, 2)
             pnl_won = int((current_price - entry_price) * shares)
 
-            # 알림 판단
+            vol_ratio, vol_grade = _volume_grade(df)
+
             alert = "정상"
             if current_price <= pos["stop_loss"]:
                 alert = "손절"
@@ -210,22 +318,24 @@ def check_my_positions(
                 alert = "매도신호"
 
             results.append({
-                "position_id": pos["id"],
-                "ticker": ticker,
-                "name": pos["name"] or get_name(ticker),
-                "entry_price": int(entry_price),
-                "shares": shares,
-                "entry_date": pos["entry_date"],
+                "position_id":  pos["id"],
+                "ticker":       ticker,
+                "name":         pos["name"] or get_name(ticker),
+                "entry_price":  int(entry_price),
+                "shares":       shares,
+                "entry_date":   pos["entry_date"],
                 "current_price": current_price,
-                "pnl_pct": pnl_pct,
-                "pnl_won": pnl_won,
-                "signal": last["signal"],
-                "rsi": round(float(last["rsi"]), 1),
-                "bb_position": _bb_position(last),
-                "stop_loss": int(pos["stop_loss"]),
-                "take_profit": int(pos["take_profit"]),
-                "alert": alert,
-                "date": df.index[-1].strftime("%Y-%m-%d"),
+                "pnl_pct":      pnl_pct,
+                "pnl_won":      pnl_won,
+                "signal":       last["signal"],
+                "rsi":          round(float(last["rsi"]), 1),
+                "bb_position":  _bb_position(last),
+                "vol_ratio":    vol_ratio,
+                "vol_grade":    vol_grade,
+                "stop_loss":    int(pos["stop_loss"]),
+                "take_profit":  int(pos["take_profit"]),
+                "alert":        alert,
+                "date":         df.index[-1].strftime("%Y-%m-%d"),
             })
         except Exception:
             pass
@@ -246,34 +356,34 @@ def send_position_report(results: list[dict], notifier: TelegramNotifier = None)
     urgent = [r for r in results if r["alert"] != "정상"]
     normal = [r for r in results if r["alert"] == "정상"]
 
-    # 긴급 알림 먼저
     if urgent:
         lines.append("⚠️ *조치 필요*")
         for r in urgent:
             emoji = {"손절": "🔴", "익절": "🟡", "매도신호": "🔔"}.get(r["alert"], "⚠️")
             sign = "+" if r["pnl_pct"] >= 0 else ""
-            pnl_str = _escape_md(f"{sign}{r['pnl_pct']:.1f}%")
+            vi   = {"강함": "🔥", "보통": "✅", "약함": "⚠️"}.get(r["vol_grade"], "❓")
+            pnl_str     = _escape_md(f"{sign}{r['pnl_pct']:.1f}%")
             pnl_won_str = _escape_md(f"{r['pnl_won']:+,}원")
-            price_str = _escape_md(f"{r['current_price']:,}")
-            entry_str = _escape_md(f"{r['entry_price']:,}")
-            alert_str = _escape_md(r["alert"])
-            name_str = _escape_md(r["name"])
-            ticker_str = _escape_md(r["ticker"])
+            entry_str   = _escape_md(str(r["entry_price"]))
+            cur_str     = _escape_md(str(r["current_price"]))
             lines.append(
-                f"{emoji} *{name_str}* \\({ticker_str}\\) — {alert_str}\n"
-                f"  매수가 {entry_str}원 → 현재 {price_str}원\n"
-                f"  수익: {pnl_str} \\({pnl_won_str}\\)  RSI: {_escape_md(str(r['rsi']))}"
+                f"{emoji} *{_escape_md(r['name'])}* \\({_escape_md(r['ticker'])}\\) "
+                f"— {_escape_md(r['alert'])}\n"
+                f"  {entry_str}원 → {cur_str}원  "
+                f"{pnl_str} \\({pnl_won_str}\\)\n"
+                f"  RSI: {_escape_md(str(r['rsi']))}  "
+                f"거래량: {vi} {_escape_md(r['vol_grade'])}"
             )
 
-    # 일반 보유 종목
     if normal:
         lines.append("\n📊 *보유 중 \\(관망\\)*")
         for r in normal:
             sign = "+" if r["pnl_pct"] >= 0 else ""
             pnl_str = _escape_md(f"{sign}{r['pnl_pct']:.1f}%")
-            price_str = _escape_md(f"{r['current_price']:,}")
-            name_str = _escape_md(r["name"])
-            lines.append(f"• {name_str}: {price_str}원 \\({pnl_str}\\)")
+            cur_str = _escape_md(str(r["current_price"]))
+            lines.append(
+                f"• {_escape_md(r['name'])}: {cur_str}원 \\({pnl_str}\\)"
+            )
 
     if not results:
         lines.append("보유 종목 없음")
@@ -281,27 +391,48 @@ def send_position_report(results: list[dict], notifier: TelegramNotifier = None)
     notifier.send_message("\n".join(lines))
 
 
+# ──────────────────────────────────────────
+# 터미널 출력
+# ──────────────────────────────────────────
+
+def print_market_trend(trend: dict):
+    status_emoji = {"강세": "🟢", "중립": "⚪", "약세": "🟡", "급락": "🔴"}.get(trend["status"], "❓")
+    print(f"\n{status_emoji} 시장 흐름: {trend['status']}  |  {trend['description']}")
+    if trend["caution"]:
+        print("  ⚠️  시장 약세 — 매수 신호라도 신중하게 판단하세요")
+
+
 def print_report(results: list[dict]):
     """터미널 출력."""
     today = date.today().strftime("%Y-%m-%d")
-    buy_list = [r for r in results if r["signal"] == BUY]
+    buy_list  = [r for r in results if r["signal"] == BUY]
     sell_list = [r for r in results if r["signal"] == SELL]
 
-    print(f"\n{'='*55}")
+    vol_icon = {"강함": "🔥", "보통": "✅", "약함": "⚠️", "미확인": "❓"}
+
+    print(f"\n{'='*65}")
     print(f"  일일 신호 체크 — {today}")
-    print(f"{'='*55}")
+    print(f"{'='*65}")
 
     if buy_list:
         print(f"\n🟢 매수 신호 {len(buy_list)}개")
         for r in buy_list:
-            print(f"  {r['ticker']} {r['name']:12s} | 현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | BB: {r['bb_position']}")
+            vi = vol_icon.get(r["vol_grade"], "")
+            print(f"  {r['ticker']} {r['name']:12s} | "
+                  f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
+                  f"BB: {r['bb_position']:8s} | "
+                  f"거래량: {vi} {r['vol_grade']}({r['vol_ratio']}배)")
 
     if sell_list:
         print(f"\n🔴 매도 신호 {len(sell_list)}개")
         for r in sell_list:
-            print(f"  {r['ticker']} {r['name']:12s} | 현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | BB: {r['bb_position']}")
+            vi = vol_icon.get(r["vol_grade"], "")
+            print(f"  {r['ticker']} {r['name']:12s} | "
+                  f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
+                  f"BB: {r['bb_position']:8s} | "
+                  f"거래량: {vi} {r['vol_grade']}({r['vol_ratio']}배)")
 
     if not buy_list and not sell_list:
         print("\n  오늘은 신호 없음 (관망)")
 
-    print(f"\n{'='*55}")
+    print(f"\n{'='*65}")

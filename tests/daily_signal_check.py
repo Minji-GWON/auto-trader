@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from backend.stocks import KOSPI_MAJOR, KOSDAQ_MAJOR
 from backend.scheduler.signal_checker import (
+    get_market_trend, print_market_trend,
     check_signals_today, send_signal_report, print_report,
     check_my_positions, send_position_report,
 )
@@ -52,7 +53,12 @@ def main():
 
     tickers = [code for code, _ in stock_list]
 
-    init_db()  # positions 테이블 생성 보장
+    init_db()
+
+    # ── 시장 흐름 체크 (가장 먼저)
+    print("── 시장 흐름 체크 ──")
+    market_trend = get_market_trend()
+    print_market_trend(market_trend)
 
     params = dict(
         rsi_oversold=args.rsi_oversold,
@@ -84,7 +90,7 @@ def main():
     print_report(results)
 
     if not args.dry_run:
-        send_signal_report(results)
+        send_signal_report(results, market_trend=market_trend)
         print("텔레그램 알림 전송 완료")
     else:
         print("(dry-run: 텔레그램 미전송)")
