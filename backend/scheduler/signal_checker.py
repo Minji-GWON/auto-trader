@@ -256,6 +256,9 @@ def send_signal_report(
     def _vol_icon(grade: str) -> str:
         return {"강함": "🔥", "보통": "✅", "약함": "⚠️", "미확인": "❓"}.get(grade, "")
 
+    def _naver_url(ticker: str) -> str:
+        return f"https://finance.naver.com/item/main.naver?code={ticker.zfill(6)}"
+
     def _signal_lines(r: dict) -> str:
         vi    = _vol_icon(r["vol_grade"])
         c     = r["confidence"]
@@ -265,8 +268,9 @@ def send_signal_report(
         vol_str   = _escape_md(r["vol_grade"])
         vol_ratio = _escape_md(str(r["vol_ratio"]))
         f_desc    = _escape_md(r["f_desc"])
+        name_link = f"[{_escape_md(r['name'])}]({_naver_url(r['ticker'])})"
         return (
-            f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)  "
+            f"• {name_link} \\({_escape_md(r['ticker'])}\\)  "
             f"{c['icon']} *{score}점* `{bar}`\n"
             f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
             f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  재무: {r['f_icon']} {f_desc}"
@@ -379,6 +383,9 @@ def send_position_report(results: list[dict], notifier: TelegramNotifier = None)
     urgent = [r for r in results if r["alert"] != "정상"]
     normal = [r for r in results if r["alert"] == "정상"]
 
+    def _pos_naver_url(ticker: str) -> str:
+        return f"https://finance.naver.com/item/main.naver?code={ticker.zfill(6)}"
+
     if urgent:
         lines.append("⚠️ *조치 필요*")
         for r in urgent:
@@ -389,8 +396,9 @@ def send_position_report(results: list[dict], notifier: TelegramNotifier = None)
             pnl_won_str = _escape_md(f"{r['pnl_won']:+,}원")
             entry_str   = _escape_md(str(r["entry_price"]))
             cur_str     = _escape_md(str(r["current_price"]))
+            name_link   = f"[{_escape_md(r['name'])}]({_pos_naver_url(r['ticker'])})"
             lines.append(
-                f"{emoji} *{_escape_md(r['name'])}* \\({_escape_md(r['ticker'])}\\) "
+                f"{emoji} *{name_link}* \\({_escape_md(r['ticker'])}\\) "
                 f"— {_escape_md(r['alert'])}\n"
                 f"  {entry_str}원 → {cur_str}원  "
                 f"{pnl_str} \\({pnl_won_str}\\)\n"
@@ -402,10 +410,11 @@ def send_position_report(results: list[dict], notifier: TelegramNotifier = None)
         lines.append("\n📊 *보유 중 \\(관망\\)*")
         for r in normal:
             sign = "+" if r["pnl_pct"] >= 0 else ""
-            pnl_str = _escape_md(f"{sign}{r['pnl_pct']:.1f}%")
-            cur_str = _escape_md(str(r["current_price"]))
+            pnl_str   = _escape_md(f"{sign}{r['pnl_pct']:.1f}%")
+            cur_str   = _escape_md(str(r["current_price"]))
+            name_link = f"[{_escape_md(r['name'])}]({_pos_naver_url(r['ticker'])})"
             lines.append(
-                f"• {_escape_md(r['name'])}: {cur_str}원 \\({pnl_str}\\)"
+                f"• {name_link}: {cur_str}원 \\({pnl_str}\\)"
             )
 
     if not results:
