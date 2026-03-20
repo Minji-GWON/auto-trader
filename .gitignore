@@ -1,0 +1,28 @@
+# 환경 변수 (절대 커밋 금지)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# 데이터 파일 (용량 큼)
+data/*.csv
+!data/sample_ohlcv.csv
+!data/SAMPLE.csv
+
+# DB 파일
+*.db
+
+# 백테스트 결과
+tests/results/*.csv
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
