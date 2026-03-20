@@ -324,6 +324,7 @@ def build_briefing_message(
     fg: dict,
     news: list[dict],
     today: Optional[date] = None,
+    summaries: Optional[list[str]] = None,
 ) -> str:
     """
     모든 데이터를 MarkdownV2 형식의 텔레그램 메시지로 조립.
@@ -420,15 +421,23 @@ def build_briefing_message(
 
     # ── 글로벌 뉴스 ───────────────────────────────────────
     lines.append("📰 *글로벌 주요 뉴스*")
-    for item in news:
-        title = _escape_md(item.get("title", ""))
+    for i, item in enumerate(news):
         url = item.get("url", "")
         if item.get("error"):
+            title = _escape_md(item.get("title", ""))
             lines.append(f"  _• {title}_")
-        elif url:
-            lines.append(f"  • [{title}]({url})")
+        elif summaries and i < len(summaries):
+            kr = _escape_md(summaries[i])
+            if url:
+                lines.append(f"  • [{kr}]({url})")
+            else:
+                lines.append(f"  • {kr}")
         else:
-            lines.append(f"  • {title}")
+            title = _escape_md(item.get("title", ""))
+            if url:
+                lines.append(f"  • [{title}]({url})")
+            else:
+                lines.append(f"  • {title}")
 
     lines.append("")
 

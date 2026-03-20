@@ -11,6 +11,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+
+
 import requests
 
 _TIMEOUT = 8
@@ -165,7 +167,10 @@ def fetch_breaking_news(
 # 메시지 빌드
 # ---------------------------------------------------------------------------
 
-def build_alert_message(articles: list[dict]) -> str:
+def build_alert_message(
+    articles: list[dict],
+    summaries: Optional[list[str]] = None,
+) -> str:
     """긴급 뉴스 텔레그램 MarkdownV2 메시지 조립."""
     now_str = _escape_md(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
     count = len(articles)
@@ -176,18 +181,29 @@ def build_alert_message(articles: list[dict]) -> str:
         "",
     ]
 
-    for i, a in enumerate(articles, 1):
-        title = _escape_md(a["title"])
+    for i, a in enumerate(articles):
         source = _escape_md(a["source"])
         time_ago = _escape_md(a["time_ago"])
         category = _escape_md(a["category"])
         url = a["url"]
 
-        lines.append(f"*{i}\\. {category}*")
-        if url:
-            lines.append(f"📰 [{title}]({url})")
+        lines.append(f"*{i+1}\\. {category}*")
+
+        if summaries and i < len(summaries):
+            # 한국어 요약 + 링크
+            kr = _escape_md(summaries[i])
+            if url:
+                lines.append(f"📰 [{kr}]({url})")
+            else:
+                lines.append(f"📰 {kr}")
         else:
-            lines.append(f"📰 {title}")
+            # 폴백: 영어 원문
+            title = _escape_md(a["title"])
+            if url:
+                lines.append(f"📰 [{title}]({url})")
+            else:
+                lines.append(f"📰 {title}")
+
         lines.append(f"   출처: {source} \\| {time_ago}")
         lines.append("")
 

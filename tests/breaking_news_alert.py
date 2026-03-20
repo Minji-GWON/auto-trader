@@ -23,9 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from backend.scheduler.breaking_news import fetch_breaking_news, build_alert_message
+from backend.scheduler.news_summarizer import summarize_news_kr
 from backend.notifier.telegram import TelegramNotifier
 
 # 이미 전송한 기사 URL을 저장하는 파일 (GitHub Actions cache로 유지)
@@ -95,7 +96,9 @@ def main() -> None:
     for a in new_articles:
         print(f"  [{a['category']}] {a['title']} ({a['time_ago']})")
 
-    message = build_alert_message(new_articles)
+    summaries = summarize_news_kr(new_articles)
+
+    message = build_alert_message(new_articles, summaries=summaries)
     print("\n── 메시지 미리보기 ──")
     print(message)
 

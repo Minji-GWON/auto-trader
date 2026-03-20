@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from backend.scheduler.macro_briefing import (
     build_briefing_message,
@@ -27,6 +27,7 @@ from backend.scheduler.macro_briefing import (
     get_mmf_data,
     get_top_news,
 )
+from backend.scheduler.news_summarizer import summarize_news_kr
 from backend.notifier.telegram import TelegramNotifier
 
 
@@ -71,12 +72,18 @@ def main() -> None:
         prefix = "  [오류]" if item.get("error") else "  •"
         print(f"{prefix} {item['title']}")
 
+    print("── 뉴스 한국어 요약 (Claude) ──")
+    summaries = summarize_news_kr([a for a in news if not a.get("error")])
+    for s in summaries:
+        print(f"  • {s}")
+
     message = build_briefing_message(
         indicators=indicators,
         mmf=mmf,
         fg=fg,
         news=news,
         today=date.today(),
+        summaries=summaries,
     )
 
     print("\n── 브리핑 메시지 미리보기 ──")
