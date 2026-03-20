@@ -13,8 +13,14 @@ from backend.data_fetcher.fetcher import get_default_csv_path
 from backend.indicators.calculator import add_all_indicators
 from backend.strategy.signal import generate_signals, BUY, SELL
 from backend.stocks import get_name as stocks_get_name, get_market, ALL_STOCKS
+from backend.stocks_us import get_us_name, ALL_US_STOCKS
 from backend.database import init_db, add_position, get_open_positions, close_position, update_position, delete_position, get_position_history
 from tests.backtest import run_backtest
+
+
+def _is_us(ticker: str) -> bool:
+    """티커가 미국 주식인지 판단 (알파벳 → US, 숫자 → KR)."""
+    return not ticker.split(".")[0].replace("-", "").isdigit()
 
 init_db()  # positions 테이블 보장
 
@@ -34,9 +40,12 @@ st.set_page_config(
 
 @st.cache_data
 def get_ticker_name(ticker: str) -> str:
-    """종목명 조회: stocks 마스터 → pykrx 폴백."""
+    """종목명 조회: US 마스터 → KR 마스터 → pykrx 폴백."""
     code = ticker.split(".")[0]
-    # 마스터 데이터 우선
+    if _is_us(ticker):
+        name = get_us_name(code)
+        return name if name != code else ticker
+    # 한국 마스터
     name = stocks_get_name(code)
     if name != ticker and name != code:
         return name
@@ -132,6 +141,13 @@ def build_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def build_chart_us(df: pd.DataFrame) -> go.Figure:
+    """미국 주식용 차트 (달러 표기)."""
+    fig = build_chart(df)
+    fig.update_yaxes(title_text="주가 ($)", row=1, col=1)
+    return fig
+
+
 # ──────────────────────────────────────────
 # 사이드바
 # ──────────────────────────────────────────
@@ -199,7 +215,9 @@ if ma_short >= ma_long:
 
 st.title("📈 자동매매 백테스트 대시보드")
 
-tab_backtest, tab_screener, tab_portfolio = st.tabs(["📊 백테스트", "🔍 단타 종목 추천", "💼 포트폴리오"])
+tab_backtest, tab_screener, tab_portfolio, tab_us = st.tabs(
+    ["📊 백테스트", "🔍 단타 종목 추천", "💼 포트폴리오", "🇺🇸 미국 주식"]
+)
 
 
 # ══════════════════════════════════════════
@@ -477,10 +495,21 @@ with tab_portfolio:
                 info_col, action_col = st.columns([3, 2])
                 with info_col:
                     cost = p["entry_price"] * p["shares"]
+                    us = _is_us(p["ticker"])
+                    if us:
+                        price_fmt  = f"${p['entry_price']:,.2f}"
+                        cost_fmt   = f"${cost:,.2f}"
+                        sl_fmt     = f"${p['stop_loss']:,.2f}"
+                        tp_fmt     = f"${p['take_profit']:,.2f}"
+                    else:
+                        price_fmt  = f"{p['entry_price']:,.0f}원"
+                        cost_fmt   = f"{cost:,.0f}원"
+                        sl_fmt     = f"{p['stop_loss']:,.0f}원"
+                        tp_fmt     = f"{p['take_profit']:,.0f}원"
                     st.markdown(f"**{p['name'] or p['ticker']}** `{p['ticker']}`  |  매수일: {p['entry_date']}")
                     st.markdown(
-                        f"매수가 **{p['entry_price']:,.0f}원** × {p['shares']}주 = **{cost:,.0f}원**  |  "
-                        f"손절 `{p['stop_loss']:,.0f}원`  익절 `{p['take_profit']:,.0f}원`"
+                        f"매수가 **{price_fmt}** × {p['shares']}주 = **{cost_fmt}**  |  "
+                        f"손절 `{sl_fmt}`  익절 `{tp_fmt}`"
                     )
                     if p["memo"]:
                         st.caption(f"메모: {p['memo']}")
@@ -572,11 +601,24 @@ with tab_portfolio:
     st.markdown("### 매수 등록")
 
     with st.form("add_position_form"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            new_ticker = st.text_input("종목코드", placeholder="예: 086900", max_chars=6)
+        mkt_col, ticker_col = st.columns([1, 2])
+        with mkt_col:
+            pos_market = st.radio("시장", ["국장 🇰🇷", "미장 🇺🇸"], horizontal=True)
+        with ticker_col:
+            if pos_market == "국장 🇰🇷":
+                new_ticker = st.text_input("종목코드", placeholder="예: 086900", max_chars=6)
+            else:
+                new_ticker = st.text_input("티커", placeholder="예: AAPL", max_chars=10)
+
+        is_us_pos = (pos_market == "미장 🇺🇸")
+        price_unit = "$" if is_us_pos else "원"
+        price_step = 0.01 if is_us_pos else 100
+        price_default = 150.0 if is_us_pos else 50000
+
+        c2, c3 = st.columns(2)
         with c2:
-            new_price = st.number_input("매수가 (원)", min_value=1, value=50000, step=100)
+            new_price = st.number_input(f"매수가 ({price_unit})", min_value=0.01,
+                value=float(price_default), step=float(price_step))
         with c3:
             new_shares = st.number_input("수량 (주)", min_value=1, value=10, step=1)
 
@@ -585,14 +627,14 @@ with tab_portfolio:
             new_date = st.date_input("매수일", value=_date.today())
         with c5:
             new_sl = st.number_input(
-                "손절가 (원)", min_value=1,
-                value=int(new_price * 0.97), step=100,
+                f"손절가 ({price_unit})", min_value=0.01,
+                value=round(new_price * 0.97, 2), step=float(price_step),
                 help="기본: 매수가 -3%"
             )
         with c6:
             new_tp = st.number_input(
-                "익절가 (원)", min_value=1,
-                value=int(new_price * 1.06), step=100,
+                f"익절가 ({price_unit})", min_value=0.01,
+                value=round(new_price * 1.06, 2), step=float(price_step),
                 help="기본: 매수가 +6%"
             )
 
@@ -603,7 +645,10 @@ with tab_portfolio:
             if not new_ticker.strip():
                 st.error("종목코드를 입력하세요.")
             else:
-                ticker = new_ticker.strip().zfill(6)
+                if is_us_pos:
+                    ticker = new_ticker.strip().upper()
+                else:
+                    ticker = new_ticker.strip().zfill(6)
                 name = get_ticker_name(ticker)
                 pos_id = add_position(
                     ticker=ticker,
@@ -616,8 +661,10 @@ with tab_portfolio:
                     memo=new_memo,
                 )
                 cost = new_price * new_shares
+                cost_str = f"${cost:,.2f}" if is_us_pos else f"{cost:,.0f}원"
+                price_str = f"${new_price:,.2f}" if is_us_pos else f"{new_price:,}원"
                 st.success(
-                    f"등록 완료! {name} {new_shares}주 × {new_price:,}원 = {cost:,}원 (ID: {pos_id})"
+                    f"등록 완료! {name} {new_shares}주 × {price_str} = {cost_str} (ID: {pos_id})"
                 )
                 st.rerun()
 
@@ -658,3 +705,147 @@ with tab_portfolio:
             )
         else:
             st.info("청산된 포지션이 없습니다.")
+
+
+# ══════════════════════════════════════════
+# 탭 4: 미국 주식
+# ══════════════════════════════════════════
+
+with tab_us:
+    st.subheader("🇺🇸 미국 주식")
+
+    us_tickers = [t for t in available_tickers if _is_us(t)]
+
+    # ── 백테스트 ──────────────────────────
+    st.markdown("### 📊 백테스트")
+
+    if not us_tickers:
+        st.warning("미국 주식 CSV 데이터가 없습니다. 먼저 데이터를 다운로드하세요.")
+        st.code(".venv/bin/python tests/download_data.py --ticker AAPL --period 2y")
+    else:
+        us_labels = [ticker_label(t) for t in us_tickers]
+        us_selected_label  = st.selectbox("종목 선택", us_labels, key="us_bt_ticker")
+        us_selected_ticker = us_tickers[us_labels.index(us_selected_label)]
+        us_capital = st.number_input("초기 자본 ($)", min_value=1000,
+                                     value=10000, step=1000, key="us_capital")
+
+        try:
+            us_result = run_backtest(
+                ticker=us_selected_ticker,
+                initial_capital=us_capital,
+                data_source="csv",
+                rsi_oversold=rsi_oversold,
+                rsi_overbought=rsi_overbought,
+                rsi_period=rsi_period,
+                bb_period=bb_period,
+                bb_std_dev=bb_std_dev,
+                ma_short=ma_short,
+                ma_long=ma_long,
+                swing_mode=swing_mode,
+                verbose=False,
+            )
+            us_df = load_enriched_data(
+                ticker=us_selected_ticker,
+                rsi_period=rsi_period, bb_period=bb_period,
+                bb_std_dev=bb_std_dev, ma_short=ma_short, ma_long=ma_long,
+                rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought,
+                swing_mode=swing_mode,
+            )
+
+            st.subheader(f"{us_selected_ticker} · {get_ticker_name(us_selected_ticker)}")
+            cols = st.columns(5)
+            cols[0].metric("총 수익률",   f"{us_result['total_return_pct']:+.2f}%")
+            cols[1].metric("MDD",         f"{us_result['mdd_pct']:+.2f}%")
+            cols[2].metric("거래 횟수",   f"{us_result['trade_count']}회")
+            cols[3].metric("승률",        f"{us_result['win_rate']:.1f}%")
+            cols[4].metric("최종 자본",   f"${us_result['final_capital']:,.2f}")
+
+            us_fig = build_chart(us_df)
+            us_fig.update_yaxes(title_text="주가 ($)", row=1, col=1)
+            st.plotly_chart(us_fig, use_container_width=True)
+
+            if len(us_result["trades_df"]) > 0:
+                st.dataframe(us_result["trades_df"], use_container_width=True)
+            else:
+                st.info("현재 조건에서는 거래가 발생하지 않았습니다.")
+
+        except ValueError as exc:
+            st.error(str(exc))
+
+    st.divider()
+
+    # ── 단타 종목 추천 ─────────────────────
+    st.markdown("### 🔍 단타 종목 추천")
+
+    if not us_tickers:
+        st.info("다운로드된 미국 종목이 없어 스캔할 수 없습니다.")
+    else:
+        us_search = st.text_input("🔎 종목 검색", placeholder="예: AAPL, 엔비디아",
+                                   key="us_search")
+        us_min_trades = st.number_input("최소 거래 횟수", min_value=1, value=2, key="us_min_trades")
+        us_run = st.button("🚀 미국 종목 스캔", use_container_width=True)
+
+        q = us_search.strip().lower()
+        us_scan = [
+            t for t in us_tickers
+            if not q or q in t.lower() or q in get_ticker_name(t).lower()
+        ]
+
+        st.info(f"📋 스캔 대상: **{len(us_scan)}개** | 모드: **{'⚡ 단타' if swing_mode else '🐢 보수'}**")
+
+        if us_run:
+            us_rows = []
+            us_prog = st.progress(0, text="스캔 중...")
+            for i, t in enumerate(us_scan):
+                us_prog.progress((i + 1) / len(us_scan), text=f"분석 중: {ticker_label(t)}")
+                try:
+                    r = run_backtest(
+                        ticker=t, initial_capital=10000, data_source="csv",
+                        rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought,
+                        rsi_period=rsi_period, bb_period=bb_period, bb_std_dev=bb_std_dev,
+                        ma_short=ma_short, ma_long=ma_long, swing_mode=swing_mode, verbose=False,
+                    )
+                    us_rows.append({
+                        "티커":       t,
+                        "종목명":     get_ticker_name(t),
+                        "수익률 (%)": round(r["total_return_pct"], 2),
+                        "MDD (%)":    round(r["mdd_pct"], 2),
+                        "거래 횟수":  r["trade_count"],
+                        "승률 (%)":   round(r["win_rate"], 1),
+                        "최종 자본($)": round(r["final_capital"], 2),
+                    })
+                except Exception:
+                    pass
+            us_prog.empty()
+
+            if us_rows:
+                us_df_result = pd.DataFrame(us_rows)
+                us_df_filtered = us_df_result[
+                    us_df_result["거래 횟수"] >= us_min_trades
+                ].sort_values("수익률 (%)", ascending=False).reset_index(drop=True)
+
+                st.success(f"✅ {len(us_scan)}개 스캔 완료 — 조건 충족 {len(us_df_filtered)}개")
+
+                if not us_df_filtered.empty:
+                    top = us_df_filtered.head(15)
+                    colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in top["수익률 (%)"]]
+                    us_fig_bar = go.Figure(go.Bar(
+                        x=top["종목명"] + "<br>" + top["티커"],
+                        y=top["수익률 (%)"],
+                        marker_color=colors,
+                        text=[f"{v:+.2f}%" for v in top["수익률 (%)"]],
+                        textposition="outside",
+                    ))
+                    us_fig_bar.update_layout(title="수익률 상위 (최대 15개)",
+                                             height=350, margin={"t": 50, "b": 20})
+                    st.plotly_chart(us_fig_bar, use_container_width=True)
+
+                st.dataframe(
+                    us_df_filtered.style.format({
+                        "수익률 (%)":  "{:+.2f}",
+                        "MDD (%)":     "{:+.2f}",
+                        "승률 (%)":    "{:.1f}",
+                        "최종 자본($)": "{:,.2f}",
+                    }).background_gradient(subset=["수익률 (%)"], cmap="RdYlGn"),
+                    use_container_width=True,
+                )
