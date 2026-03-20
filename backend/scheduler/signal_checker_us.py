@@ -23,6 +23,7 @@ from backend.scheduler.fundamentals_us import get_fundamental_us
 from backend.scheduler.fundamentals import grade_fundamental     # 동일한 등급 로직 재사용
 from backend.scheduler.confidence import calc_confidence, score_bar
 from backend.scheduler.signal_checker import _volume_grade, _bb_position  # 공통 유틸 재사용
+from backend.scheduler.earnings_us import get_earnings_warning_us
 
 
 _MIN_ROWS = 80
@@ -158,6 +159,7 @@ def check_signals_today_us(
                 "f_icon":      f_icon,
                 "f_desc":      f_desc,
                 "confidence":  confidence,
+                "earnings":    get_earnings_warning_us(ticker),
                 "date":        df.index[-1].strftime("%Y-%m-%d"),
             })
         except Exception:
@@ -215,11 +217,14 @@ def send_signal_report_us(
         vol_ratio = _escape_md(str(r["vol_ratio"]))
         f_desc    = _escape_md(r["f_desc"])
         name_link = f"[{_escape_md(r['name'])}]({_yahoo_url(r['ticker'])})"
+        e = r.get("earnings", {})
+        earnings_line = f"\n  {_escape_md(e['label'])}" if e.get("warning") else ""
         return (
             f"• {name_link} \\({_escape_md(r['ticker'])}\\)  "
             f"{c['icon']} *{score}점* `{bar}`\n"
             f"  현재가: {price_str}  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
             f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  재무: {r['f_icon']} {f_desc}"
+            f"{earnings_line}"
         )
 
     if buy_list:
@@ -268,6 +273,9 @@ def print_report_us(results: list[dict]):
               f"현재가: ${r['price']:>8,.2f} | RSI: {r['rsi']:>5} | "
               f"거래량: {vi}{r['vol_grade']}({r['vol_ratio']}배) | "
               f"재무: {r['f_icon']} {r['f_desc']}")
+        e = r.get("earnings", {})
+        if e.get("warning"):
+            print(f"    {e['label']}")
 
     if buy_list:
         print(f"\n🟢 매수 신호 {len(buy_list)}개")
