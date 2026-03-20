@@ -1,0 +1,34 @@
+name: 일일 매크로 시장 브리핑
+
+on:
+  schedule:
+    # UTC 22:30 일~목 = KST 07:30 월~금 (장 시작 전 브리핑)
+    - cron: '30 22 * * 0-4'
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  macro-briefing:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests
+
+      - name: 매크로 브리핑 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY:       ${{ secrets.FRED_API_KEY }}
+          NEWS_API_KEY:       ${{ secrets.NEWS_API_KEY }}
+        run: python tests/daily_macro_briefing.py
