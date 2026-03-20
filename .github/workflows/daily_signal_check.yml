@@ -1,0 +1,29 @@
+name: 일일 매매 신호 체크
+
+on:
+  schedule:
+    - cron: '10 7 * * 1-5'  # UTC 07:10 = KST 16:10 (평일)
+  workflow_dispatch:          # 깃허브에서 수동 실행 버튼
+
+jobs:
+  signal-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 패키지 설치
+        run: pip install yfinance pandas numpy python-dotenv requests pykrx
+
+      - name: 일일 신호 체크 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python tests/daily_signal_check.py --market all

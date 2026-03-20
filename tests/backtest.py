@@ -39,6 +39,7 @@ def run_backtest(
     bb_std_dev: float = 2.0,
     ma_short: int = 20,
     ma_long: int = 60,
+    swing_mode: bool = False,
     verbose: bool = True,
 ) -> dict:
     """
@@ -77,7 +78,7 @@ def run_backtest(
         ma_short=ma_short,
         ma_long=ma_long,
     )
-    df = generate_signals(df, rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought)
+    df = generate_signals(df, rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought, swing_mode=swing_mode)
     df = df.dropna()
     if df.empty:
         raise ValueError(

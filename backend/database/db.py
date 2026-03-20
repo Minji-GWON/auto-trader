@@ -83,6 +83,25 @@ CREATE TABLE IF NOT EXISTS batch_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_batch_run_date ON batch_results(run_date);
+
+CREATE TABLE IF NOT EXISTS positions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker       TEXT    NOT NULL,
+    name         TEXT,
+    entry_price  REAL    NOT NULL,
+    shares       INTEGER NOT NULL,
+    entry_date   TEXT    NOT NULL,
+    stop_loss    REAL,
+    take_profit  REAL,
+    status       TEXT    NOT NULL DEFAULT 'open',
+    exit_price   REAL,
+    exit_date    TEXT,
+    exit_reason  TEXT,
+    memo         TEXT,
+    created_at   TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 """
 
 
@@ -255,6 +274,79 @@ def get_best_params(ticker: str) -> Optional[dict]:
             (ticker,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def add_position(
+    ticker: str,
+    entry_price: float,
+    shares: int,
+    entry_date: str,
+    name: str = "",
+    stop_loss: float = None,
+    take_profit: float = None,
+    memo: str = "",
+) -> int:
+    """
+    매수한 종목을 포지션으로 등록하고 position_id를 반환한다.
+
+    Args:
+        ticker: 종목 코드 (6자리)
+        entry_price: 매수가
+        shares: 매수 수량
+        entry_date: 매수일 (YYYY-MM-DD)
+        stop_loss: 손절가 (None이면 entry_price * 0.97)
+        take_profit: 익절가 (None이면 entry_price * 1.06)
+    """
+    if stop_loss is None:
+        stop_loss = round(entry_price * 0.97, 0)
+    if take_profit is None:
+        take_profit = round(entry_price * 1.06, 0)
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """INSERT INTO positions
+               (ticker, name, entry_price, shares, entry_date,
+                stop_loss, take_profit, status, memo, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (ticker, name, entry_price, shares, entry_date,
+             stop_loss, take_profit, "open", memo, created_at),
+        )
+    return cursor.lastrowid
+
+
+def get_open_positions() -> list[dict]:
+    """현재 보유 중인 포지션 목록을 반환한다."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM positions WHERE status = 'open' ORDER BY entry_date DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def close_position(
+    position_id: int,
+    exit_price: float,
+    exit_date: str,
+    exit_reason: str = "수동매도",
+) -> None:
+    """포지션을 청산(매도) 처리한다."""
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE positions
+               SET status='closed', exit_price=?, exit_date=?, exit_reason=?
+               WHERE id=?""",
+            (exit_price, exit_date, exit_reason, position_id),
+        )
+
+
+def get_position_history() -> list[dict]:
+    """전체 포지션 이력 (open + closed) 을 반환한다."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM positions ORDER BY entry_date DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def save_batch_results(batch_df: pd.DataFrame, run_date: str) -> None:

@@ -7,6 +7,10 @@ from backend.database.db import (
     save_parameter_sweep,
     get_best_params,
     save_batch_results,
+    add_position,
+    get_open_positions,
+    close_position,
+    get_position_history,
 )
 
 __all__ = [
@@ -16,4 +20,8 @@ __all__ = [
     "save_parameter_sweep",
     "get_best_params",
     "save_batch_results",
+    "add_position",
+    "get_open_positions",
+    "close_position",
+    "get_position_history",
 ]
