@@ -1,0 +1,31 @@
+name: 미국 주식 일일 신호 체크
+
+on:
+  schedule:
+    # 미장 마감 후 (EST 16:00 = UTC 21:10, KST 다음날 06:10)
+    # 서머타임(EDT)엔 UTC 20:00 마감 → 21:10에도 충분히 반영됨
+    - cron: '10 21 * * 1-5'
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  signal-check-us:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests
+
+      - name: 미국 주식 신호 체크 실행
+        run: python tests/daily_signal_check_us.py

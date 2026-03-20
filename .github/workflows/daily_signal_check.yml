@@ -22,7 +22,7 @@ jobs:
           cache: 'pip'
 
       - name: 패키지 설치
-        run: pip install yfinance pandas numpy python-dotenv requests pykrx
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests pykrx
 
       - name: 일일 신호 체크 실행
         env:
