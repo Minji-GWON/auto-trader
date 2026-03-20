@@ -35,11 +35,12 @@ def main():
         choices=["all", "kospi", "kosdaq"],
         help="체크할 시장 (기본: all)",
     )
-    parser.add_argument("--rsi-oversold", type=float, default=35)
+    # 파라미터 스윕으로 도출한 국장 최적값 (RSI45/65, MA10/30, BB1.5)
+    parser.add_argument("--rsi-oversold", type=float, default=45)
     parser.add_argument("--rsi-overbought", type=float, default=65)
     parser.add_argument("--bb-std-dev", type=float, default=1.5)
-    parser.add_argument("--ma-short", type=int, default=20)
-    parser.add_argument("--ma-long", type=int, default=40)
+    parser.add_argument("--ma-short", type=int, default=10)
+    parser.add_argument("--ma-long", type=int, default=30)
     parser.add_argument("--no-swing", action="store_true", help="스윙 모드 OFF (기본: ON)")
     parser.add_argument("--dry-run", action="store_true", help="텔레그램 미전송, 터미널만 출력")
     args = parser.parse_args()

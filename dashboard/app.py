@@ -181,9 +181,9 @@ with st.sidebar:
     st.divider()
     st.subheader("📈 RSI 설정")
     st.caption("주식이 얼마나 과열/침체됐는지 나타내는 지표 (0~100)")
-    rsi_oversold = st.slider("매수 기준 (RSI 하한)", 10, 45, 30,
+    rsi_oversold = st.slider("매수 기준 (RSI 하한)", 10, 50, 45,
                               help="이 값 아래 = '너무 많이 팔렸다' → 매수 신호")
-    rsi_overbought = st.slider("매도 기준 (RSI 상한)", 55, 90, 70,
+    rsi_overbought = st.slider("매도 기준 (RSI 상한)", 55, 90, 65,
                                 help="이 값 위 = '너무 많이 올랐다' → 매도 신호")
     rsi_period = st.slider("RSI 계산 기간 (일)", 5, 30, 14,
                             help="며칠치 데이터로 RSI를 계산할지. 보통 14일.")
@@ -199,9 +199,9 @@ with st.sidebar:
     st.divider()
     st.subheader("📉 이동평균 설정")
     st.caption("주가의 평균 흐름(추세)을 나타내는 선")
-    ma_short = st.slider("단기 이동평균 (일)", 3, 40, 20,
+    ma_short = st.slider("단기 이동평균 (일)", 3, 40, 10,
                           help="짧은 기간 평균 주가. 장기보다 반드시 작아야 합니다.")
-    ma_long = st.slider("장기 이동평균 (일)", 10, 120, 60,
+    ma_long = st.slider("장기 이동평균 (일)", 10, 120, 30,
                          help="긴 기간 평균 주가. 단기보다 반드시 커야 합니다.")
 
 if ma_short >= ma_long:
@@ -716,6 +716,19 @@ with tab_us:
 
     us_tickers = [t for t in available_tickers if _is_us(t)]
 
+    # ── 미장 전용 파라미터 (스윕 최적값: RSI40/65, MA10/30, BB1.5) ──
+    with st.expander("⚙️ 미장 파라미터 설정", expanded=False):
+        st.caption("파라미터 스윕으로 도출한 미장 최적값이 기본 적용됩니다.")
+        uc1, uc2, uc3 = st.columns(3)
+        us_rsi_os  = uc1.slider("RSI 매수 기준", 10, 55, 40, key="us_rsi_os")
+        us_rsi_ob  = uc2.slider("RSI 매도 기준", 55, 90, 65, key="us_rsi_ob")
+        us_bb_std  = uc3.slider("BB 표준편차", 1.0, 3.0, 1.5, step=0.1, key="us_bb_std")
+        ud1, ud2, ud3 = st.columns(3)
+        us_ma_s    = ud1.slider("MA 단기 (일)", 3, 40, 10, key="us_ma_s")
+        us_ma_l    = ud2.slider("MA 장기 (일)", 10, 120, 30, key="us_ma_l")
+        us_rsi_p   = ud3.slider("RSI 기간 (일)", 5, 30, 14, key="us_rsi_p")
+        us_bb_p    = ud1.slider("BB 기간 (일)", 5, 40, 20, key="us_bb_p")
+
     # ── 백테스트 ──────────────────────────
     st.markdown("### 📊 백테스트")
 
@@ -734,21 +747,21 @@ with tab_us:
                 ticker=us_selected_ticker,
                 initial_capital=us_capital,
                 data_source="csv",
-                rsi_oversold=rsi_oversold,
-                rsi_overbought=rsi_overbought,
-                rsi_period=rsi_period,
-                bb_period=bb_period,
-                bb_std_dev=bb_std_dev,
-                ma_short=ma_short,
+                rsi_oversold=us_rsi_os,
+                rsi_overbought=us_rsi_ob,
+                rsi_period=us_rsi_p,
+                bb_period=us_bb_p,
+                bb_std_dev=us_bb_std,
+                ma_short=us_ma_s,
                 ma_long=ma_long,
                 swing_mode=swing_mode,
                 verbose=False,
             )
             us_df = load_enriched_data(
                 ticker=us_selected_ticker,
-                rsi_period=rsi_period, bb_period=bb_period,
-                bb_std_dev=bb_std_dev, ma_short=ma_short, ma_long=ma_long,
-                rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought,
+                rsi_period=us_rsi_p, bb_period=us_bb_p,
+                bb_std_dev=us_bb_std, ma_short=us_ma_s, ma_long=us_ma_l,
+                rsi_oversold=us_rsi_os, rsi_overbought=us_rsi_ob,
                 swing_mode=swing_mode,
             )
 
@@ -801,9 +814,9 @@ with tab_us:
                 try:
                     r = run_backtest(
                         ticker=t, initial_capital=10000, data_source="csv",
-                        rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought,
-                        rsi_period=rsi_period, bb_period=bb_period, bb_std_dev=bb_std_dev,
-                        ma_short=ma_short, ma_long=ma_long, swing_mode=swing_mode, verbose=False,
+                        rsi_oversold=us_rsi_os, rsi_overbought=us_rsi_ob,
+                        rsi_period=us_rsi_p, bb_period=us_bb_p, bb_std_dev=us_bb_std,
+                        ma_short=us_ma_s, ma_long=us_ma_l, swing_mode=swing_mode, verbose=False,
                     )
                     us_rows.append({
                         "티커":       t,

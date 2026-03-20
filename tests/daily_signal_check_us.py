@@ -28,11 +28,12 @@ from backend.database import init_db
 
 def main():
     parser = argparse.ArgumentParser(description="미국 주식 일일 신호 체크")
-    parser.add_argument("--rsi-oversold",  type=float, default=35)
+    # 파라미터 스윕으로 도출한 미장 최적값 (RSI40/65, MA10/30, BB1.5)
+    parser.add_argument("--rsi-oversold",  type=float, default=40)
     parser.add_argument("--rsi-overbought", type=float, default=65)
     parser.add_argument("--bb-std-dev",    type=float, default=1.5)
-    parser.add_argument("--ma-short",      type=int,   default=20)
-    parser.add_argument("--ma-long",       type=int,   default=40)
+    parser.add_argument("--ma-short",      type=int,   default=10)
+    parser.add_argument("--ma-long",       type=int,   default=30)
     parser.add_argument("--no-swing",      action="store_true", help="스윙 모드 OFF")
     parser.add_argument("--dry-run",       action="store_true", help="텔레그램 미전송")
     args = parser.parse_args()
