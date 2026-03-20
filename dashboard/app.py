@@ -13,7 +13,10 @@ from backend.data_fetcher.fetcher import get_default_csv_path
 from backend.indicators.calculator import add_all_indicators
 from backend.strategy.signal import generate_signals, BUY, SELL
 from backend.stocks import get_name as stocks_get_name, get_market, ALL_STOCKS
+from backend.database import init_db, add_position, get_open_positions, close_position, update_position, delete_position, get_position_history
 from tests.backtest import run_backtest
+
+init_db()  # positions 테이블 보장
 
 COMMISSION_RATE = 0.00015
 SLIPPAGE_RATE = 0.001
@@ -196,7 +199,7 @@ if ma_short >= ma_long:
 
 st.title("📈 자동매매 백테스트 대시보드")
 
-tab_backtest, tab_screener = st.tabs(["📊 백테스트", "🔍 단타 종목 추천"])
+tab_backtest, tab_screener, tab_portfolio = st.tabs(["📊 백테스트", "🔍 단타 종목 추천", "💼 포트폴리오"])
 
 
 # ══════════════════════════════════════════
@@ -449,3 +452,209 @@ with tab_screener:
                 "**변동성↑** = 주가 움직임이 크다 (코스닥 평균 40~60%)  |  "
                 "코스닥 고변동성 종목은 단타/스윙 모드와 함께 사용하세요."
             )
+
+
+# ══════════════════════════════════════════
+# 탭 3: 포트폴리오 관리
+# ══════════════════════════════════════════
+
+with tab_portfolio:
+    st.subheader("💼 내 포트폴리오")
+
+    # ── 섹션 1: 보유 포지션 ──────────────────
+    st.markdown("### 보유 종목")
+
+    positions = get_open_positions()
+
+    if positions:
+        from datetime import date as _date
+        total_invested = sum(p["entry_price"] * p["shares"] for p in positions)
+        st.caption(f"총 {len(positions)}개 종목 보유 중 | 총 투자금: {total_invested:,.0f}원")
+
+        for p in positions:
+            with st.container(border=True):
+                # 상단: 종목 정보
+                info_col, action_col = st.columns([3, 2])
+                with info_col:
+                    cost = p["entry_price"] * p["shares"]
+                    st.markdown(f"**{p['name'] or p['ticker']}** `{p['ticker']}`  |  매수일: {p['entry_date']}")
+                    st.markdown(
+                        f"매수가 **{p['entry_price']:,.0f}원** × {p['shares']}주 = **{cost:,.0f}원**  |  "
+                        f"손절 `{p['stop_loss']:,.0f}원`  익절 `{p['take_profit']:,.0f}원`"
+                    )
+                    if p["memo"]:
+                        st.caption(f"메모: {p['memo']}")
+
+                with action_col:
+                    btn1, btn2, btn3 = st.columns(3)
+                    show_sell = btn1.button("매도", key=f"open_sell_{p['id']}", type="primary", use_container_width=True)
+                    show_edit = btn2.button("수정", key=f"open_edit_{p['id']}", use_container_width=True)
+                    show_del  = btn3.button("삭제", key=f"open_del_{p['id']}", use_container_width=True)
+
+                # 매도 폼
+                if show_sell:
+                    st.session_state[f"mode_{p['id']}"] = "sell"
+                if show_edit:
+                    st.session_state[f"mode_{p['id']}"] = "edit"
+                if show_del:
+                    st.session_state[f"mode_{p['id']}"] = "delete"
+
+                mode = st.session_state.get(f"mode_{p['id']}")
+
+                if mode == "sell":
+                    with st.form(key=f"sell_form_{p['id']}"):
+                        sc1, sc2 = st.columns(2)
+                        sell_price = sc1.number_input("매도가 (원)", min_value=1,
+                            value=int(p["entry_price"]), step=100)
+                        sell_reason = sc2.selectbox("매도 사유",
+                            ["수동매도", "매도신호", "익절", "손절"])
+                        ok, cancel = st.columns(2)
+                        if ok.form_submit_button("확인", type="primary", use_container_width=True):
+                            close_position(p["id"], sell_price, _date.today().isoformat(), sell_reason)
+                            pnl = (sell_price - p["entry_price"]) * p["shares"]
+                            pnl_pct = (sell_price / p["entry_price"] - 1) * 100
+                            st.session_state.pop(f"mode_{p['id']}", None)
+                            st.success(f"매도 완료! 손익: {pnl:+,.0f}원 ({pnl_pct:+.1f}%)")
+                            st.rerun()
+                        if cancel.form_submit_button("취소", use_container_width=True):
+                            st.session_state.pop(f"mode_{p['id']}", None)
+                            st.rerun()
+
+                elif mode == "edit":
+                    with st.form(key=f"edit_form_{p['id']}"):
+                        ec1, ec2, ec3 = st.columns(3)
+                        new_price = ec1.number_input("매수가 (원)", min_value=1,
+                            value=int(p["entry_price"]), step=100)
+                        new_shares = ec2.number_input("수량 (주)", min_value=1,
+                            value=int(p["shares"]), step=1)
+                        new_entry_date = ec3.date_input("매수일",
+                            value=pd.to_datetime(p["entry_date"]).date())
+                        ed1, ed2, ed3 = st.columns(3)
+                        new_sl = ed1.number_input("손절가 (원)", min_value=1,
+                            value=int(p["stop_loss"]), step=100)
+                        new_tp = ed2.number_input("익절가 (원)", min_value=1,
+                            value=int(p["take_profit"]), step=100)
+                        new_memo = ed3.text_input("메모", value=p["memo"] or "")
+                        ok, cancel = st.columns(2)
+                        if ok.form_submit_button("저장", type="primary", use_container_width=True):
+                            update_position(p["id"],
+                                entry_price=float(new_price),
+                                shares=int(new_shares),
+                                entry_date=new_entry_date.isoformat(),
+                                stop_loss=float(new_sl),
+                                take_profit=float(new_tp),
+                                memo=new_memo,
+                            )
+                            st.session_state.pop(f"mode_{p['id']}", None)
+                            st.success("수정 완료!")
+                            st.rerun()
+                        if cancel.form_submit_button("취소", use_container_width=True):
+                            st.session_state.pop(f"mode_{p['id']}", None)
+                            st.rerun()
+
+                elif mode == "delete":
+                    st.warning(f"**{p['name'] or p['ticker']}** 포지션을 삭제합니다. 복구할 수 없습니다.")
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("삭제 확인", key=f"del_confirm_{p['id']}", type="primary", use_container_width=True):
+                        delete_position(p["id"])
+                        st.session_state.pop(f"mode_{p['id']}", None)
+                        st.success("삭제 완료!")
+                        st.rerun()
+                    if dc2.button("취소", key=f"del_cancel_{p['id']}", use_container_width=True):
+                        st.session_state.pop(f"mode_{p['id']}", None)
+                        st.rerun()
+    else:
+        st.info("보유 중인 종목이 없습니다.")
+
+    st.divider()
+
+    # ── 섹션 2: 매수 등록 ──────────────────
+    st.markdown("### 매수 등록")
+
+    with st.form("add_position_form"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            new_ticker = st.text_input("종목코드", placeholder="예: 086900", max_chars=6)
+        with c2:
+            new_price = st.number_input("매수가 (원)", min_value=1, value=50000, step=100)
+        with c3:
+            new_shares = st.number_input("수량 (주)", min_value=1, value=10, step=1)
+
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            new_date = st.date_input("매수일", value=_date.today())
+        with c5:
+            new_sl = st.number_input(
+                "손절가 (원)", min_value=1,
+                value=int(new_price * 0.97), step=100,
+                help="기본: 매수가 -3%"
+            )
+        with c6:
+            new_tp = st.number_input(
+                "익절가 (원)", min_value=1,
+                value=int(new_price * 1.06), step=100,
+                help="기본: 매수가 +6%"
+            )
+
+        new_memo = st.text_input("메모 (선택)", placeholder="예: 텔레그램 신호 매수")
+
+        submitted = st.form_submit_button("매수 등록", use_container_width=True, type="primary")
+        if submitted:
+            if not new_ticker.strip():
+                st.error("종목코드를 입력하세요.")
+            else:
+                ticker = new_ticker.strip().zfill(6)
+                name = get_ticker_name(ticker)
+                pos_id = add_position(
+                    ticker=ticker,
+                    entry_price=float(new_price),
+                    shares=int(new_shares),
+                    entry_date=new_date.isoformat(),
+                    name=name,
+                    stop_loss=float(new_sl),
+                    take_profit=float(new_tp),
+                    memo=new_memo,
+                )
+                cost = new_price * new_shares
+                st.success(
+                    f"등록 완료! {name} {new_shares}주 × {new_price:,}원 = {cost:,}원 (ID: {pos_id})"
+                )
+                st.rerun()
+
+    st.divider()
+
+    # ── 섹션 3: 거래 이력 ──────────────────
+    with st.expander("거래 이력 (청산 완료)", expanded=False):
+        history = get_position_history()
+        closed = [p for p in history if p["status"] == "closed"]
+        if closed:
+            rows = []
+            for p in closed:
+                pnl_pct = (p["exit_price"] / p["entry_price"] - 1) * 100 if p["exit_price"] else 0
+                pnl_won = (p["exit_price"] - p["entry_price"]) * p["shares"] if p["exit_price"] else 0
+                rows.append({
+                    "종목명": p["name"] or p["ticker"],
+                    "종목코드": p["ticker"],
+                    "매수가": p["entry_price"],
+                    "매도가": p["exit_price"],
+                    "수량": p["shares"],
+                    "손익 (%)": round(pnl_pct, 2),
+                    "손익 (원)": int(pnl_won),
+                    "사유": p["exit_reason"],
+                    "매수일": p["entry_date"],
+                    "매도일": p["exit_date"],
+                })
+            df_hist = pd.DataFrame(rows)
+            total_pnl = df_hist["손익 (원)"].sum()
+            st.caption(f"총 {len(closed)}건 | 누적 손익: {total_pnl:+,.0f}원")
+            st.dataframe(
+                df_hist.style.format({
+                    "매수가": "{:,.0f}",
+                    "매도가": "{:,.0f}",
+                    "손익 (%)": "{:+.2f}",
+                    "손익 (원)": "{:+,.0f}",
+                }).background_gradient(subset=["손익 (%)"], cmap="RdYlGn"),
+                use_container_width=True,
+            )
+        else:
+            st.info("청산된 포지션이 없습니다.")

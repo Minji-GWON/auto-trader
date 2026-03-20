@@ -340,6 +340,42 @@ def close_position(
         )
 
 
+def update_position(
+    position_id: int,
+    entry_price: float = None,
+    shares: int = None,
+    entry_date: str = None,
+    stop_loss: float = None,
+    take_profit: float = None,
+    memo: str = None,
+) -> None:
+    """보유 포지션의 정보를 수정한다. None인 항목은 변경하지 않음."""
+    fields, values = [], []
+    if entry_price is not None:
+        fields.append("entry_price=?"); values.append(entry_price)
+    if shares is not None:
+        fields.append("shares=?"); values.append(shares)
+    if entry_date is not None:
+        fields.append("entry_date=?"); values.append(entry_date)
+    if stop_loss is not None:
+        fields.append("stop_loss=?"); values.append(stop_loss)
+    if take_profit is not None:
+        fields.append("take_profit=?"); values.append(take_profit)
+    if memo is not None:
+        fields.append("memo=?"); values.append(memo)
+    if not fields:
+        return
+    values.append(position_id)
+    with _connect() as conn:
+        conn.execute(f"UPDATE positions SET {', '.join(fields)} WHERE id=?", values)
+
+
+def delete_position(position_id: int) -> None:
+    """포지션을 DB에서 완전 삭제한다."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM positions WHERE id=?", (position_id,))
+
+
 def get_position_history() -> list[dict]:
     """전체 포지션 이력 (open + closed) 을 반환한다."""
     with _connect() as conn:

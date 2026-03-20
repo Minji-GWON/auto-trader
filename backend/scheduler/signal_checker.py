@@ -22,6 +22,7 @@ from backend.notifier import TelegramNotifier
 from backend.stocks import ALL_STOCKS, get_name
 from backend.database import get_open_positions
 from backend.scheduler.fundamentals import get_fundamental, grade_fundamental
+from backend.scheduler.confidence import calc_confidence, score_bar
 
 
 # 신호 체크에 필요한 최소 봉 수 (ma_long 기본 40 + 여유)
@@ -140,6 +141,7 @@ def check_signals_today(
     ma_long: int = 40,
     swing_mode: bool = True,
     data_period: str = "6mo",
+    market_trend: dict = None,
 ) -> list[dict]:
     """
     주어진 종목 리스트에 대해 오늘 신호를 체크하고 결과 리스트 반환.
@@ -174,6 +176,16 @@ def check_signals_today(
             code = ticker.split(".")[0]
             fund = get_fundamental(code)
             f_grade, f_icon, f_desc = grade_fundamental(fund)
+            mkt_status = (market_trend or {}).get("status", "알 수 없음")
+            confidence = calc_confidence(
+                signal=signal,
+                rsi=round(float(last["rsi"]), 1),
+                rsi_oversold=rsi_oversold,
+                rsi_overbought=rsi_overbought,
+                vol_grade=vol_grade,
+                market_status=mkt_status,
+                f_grade=f_grade,
+            )
             results.append({
                 "ticker":      code,
                 "name":        get_name(code),
@@ -187,6 +199,7 @@ def check_signals_today(
                 "f_grade":     f_grade,
                 "f_icon":      f_icon,
                 "f_desc":      f_desc,
+                "confidence":  confidence,
                 "date":        df.index[-1].strftime("%Y-%m-%d"),
             })
         except Exception:
@@ -234,23 +247,29 @@ def send_signal_report(
         if market_trend["caution"]:
             lines.append("⚠️ 시장 약세 — 매수 신호라도 신중하게 판단하세요")
 
-    buy_list  = [r for r in results if r["signal"] == BUY]
-    sell_list = [r for r in results if r["signal"] == SELL]
+    # 신뢰도 높은 순 정렬
+    buy_list  = sorted([r for r in results if r["signal"] == BUY],
+                       key=lambda x: x["confidence"]["score"], reverse=True)
+    sell_list = sorted([r for r in results if r["signal"] == SELL],
+                       key=lambda x: x["confidence"]["score"], reverse=True)
 
     def _vol_icon(grade: str) -> str:
         return {"강함": "🔥", "보통": "✅", "약함": "⚠️", "미확인": "❓"}.get(grade, "")
 
     def _signal_lines(r: dict) -> str:
-        vi = _vol_icon(r["vol_grade"])
+        vi    = _vol_icon(r["vol_grade"])
+        c     = r["confidence"]
+        bar   = _escape_md(score_bar(c["score"], width=8))
+        score = _escape_md(str(c["score"]))
         price_str = _escape_md(f"{r['price']:,}")
         vol_str   = _escape_md(r["vol_grade"])
         vol_ratio = _escape_md(str(r["vol_ratio"]))
         f_desc    = _escape_md(r["f_desc"])
         return (
-            f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
+            f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)  "
+            f"{c['icon']} *{score}점* `{bar}`\n"
             f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
-            f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  "
-            f"재무: {r['f_icon']} {f_desc}"
+            f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  재무: {r['f_icon']} {f_desc}"
         )
 
     if buy_list:
@@ -420,19 +439,24 @@ def print_report(results: list[dict]):
 
     def _print_row(r: dict):
         vi = vol_icon.get(r["vol_grade"], "")
+        c  = r["confidence"]
+        bar = score_bar(c["score"], width=8)
         print(f"  {r['ticker']} {r['name']:12s} | "
+              f"신뢰도: {c['icon']}{c['score']:>3}점 [{bar}] | "
               f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
               f"거래량: {vi}{r['vol_grade']}({r['vol_ratio']}배) | "
               f"재무: {r['f_icon']} {r['f_desc']}")
 
     if buy_list:
+        buy_sorted = sorted(buy_list, key=lambda x: x["confidence"]["score"], reverse=True)
         print(f"\n🟢 매수 신호 {len(buy_list)}개")
-        for r in buy_list:
+        for r in buy_sorted:
             _print_row(r)
 
     if sell_list:
+        sell_sorted = sorted(sell_list, key=lambda x: x["confidence"]["score"], reverse=True)
         print(f"\n🔴 매도 신호 {len(sell_list)}개")
-        for r in sell_list:
+        for r in sell_sorted:
             _print_row(r)
 
     if not buy_list and not sell_list:

@@ -10,6 +10,8 @@ from backend.database.db import (
     add_position,
     get_open_positions,
     close_position,
+    update_position,
+    delete_position,
     get_position_history,
 )
 
@@ -23,5 +25,7 @@ __all__ = [
     "add_position",
     "get_open_positions",
     "close_position",
+    "update_position",
+    "delete_position",
     "get_position_history",
 ]

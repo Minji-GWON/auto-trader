@@ -86,7 +86,7 @@ def main():
 
     # ② 전체 시장 신호 스캔
     print(f"\n── 신호 스캔 ({args.market.upper()} {len(tickers)}개) ──")
-    results = check_signals_today(tickers=tickers, **params)
+    results = check_signals_today(tickers=tickers, market_trend=market_trend, **params)
     print_report(results)
 
     if not args.dry_run:
