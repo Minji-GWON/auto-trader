@@ -307,7 +307,8 @@ def get_top_news(news_api_key: str, n: int = 5) -> list[dict]:
             if " - " in title:
                 title = title.rsplit(" - ", 1)[0]
             source = (a.get("source") or {}).get("name", "")
-            result.append({"title": title, "source": source})
+            url = a.get("url", "")
+            result.append({"title": title, "source": source, "url": url})
         return result if result else [{"title": "뉴스 없음", "source": "", "error": True}]
     except Exception as e:
         return [{"title": f"뉴스 조회 실패: {e}", "source": "", "error": True}]
@@ -421,8 +422,11 @@ def build_briefing_message(
     lines.append("📰 *글로벌 주요 뉴스*")
     for item in news:
         title = _escape_md(item.get("title", ""))
+        url = item.get("url", "")
         if item.get("error"):
             lines.append(f"  _• {title}_")
+        elif url:
+            lines.append(f"  • [{title}]({url})")
         else:
             lines.append(f"  • {title}")
 
