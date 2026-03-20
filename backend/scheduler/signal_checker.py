@@ -21,6 +21,7 @@ from backend.strategy.signal import generate_signals, BUY, SELL
 from backend.notifier import TelegramNotifier
 from backend.stocks import ALL_STOCKS, get_name
 from backend.database import get_open_positions
+from backend.scheduler.fundamentals import get_fundamental, grade_fundamental
 
 
 # 신호 체크에 필요한 최소 봉 수 (ma_long 기본 40 + 여유)
@@ -171,16 +172,22 @@ def check_signals_today(
 
             vol_ratio, vol_grade = _volume_grade(df)
             code = ticker.split(".")[0]
+            fund = get_fundamental(code)
+            f_grade, f_icon, f_desc = grade_fundamental(fund)
             results.append({
-                "ticker":     code,
-                "name":       get_name(code),
-                "signal":     signal,
-                "price":      int(last["close"]),
-                "rsi":        round(float(last["rsi"]), 1),
+                "ticker":      code,
+                "name":        get_name(code),
+                "signal":      signal,
+                "price":       int(last["close"]),
+                "rsi":         round(float(last["rsi"]), 1),
                 "bb_position": _bb_position(last),
-                "vol_ratio":  vol_ratio,
-                "vol_grade":  vol_grade,
-                "date":       df.index[-1].strftime("%Y-%m-%d"),
+                "vol_ratio":   vol_ratio,
+                "vol_grade":   vol_grade,
+                "fund":        fund,
+                "f_grade":     f_grade,
+                "f_icon":      f_icon,
+                "f_desc":      f_desc,
+                "date":        df.index[-1].strftime("%Y-%m-%d"),
             })
         except Exception:
             pass
@@ -233,31 +240,28 @@ def send_signal_report(
     def _vol_icon(grade: str) -> str:
         return {"강함": "🔥", "보통": "✅", "약함": "⚠️", "미확인": "❓"}.get(grade, "")
 
+    def _signal_lines(r: dict) -> str:
+        vi = _vol_icon(r["vol_grade"])
+        price_str = _escape_md(f"{r['price']:,}")
+        vol_str   = _escape_md(r["vol_grade"])
+        vol_ratio = _escape_md(str(r["vol_ratio"]))
+        f_desc    = _escape_md(r["f_desc"])
+        return (
+            f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
+            f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
+            f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  "
+            f"재무: {r['f_icon']} {f_desc}"
+        )
+
     if buy_list:
         lines.append(f"\n🟢 *매수 신호 {len(buy_list)}개*")
         for r in buy_list:
-            vi = _vol_icon(r["vol_grade"])
-            price_str = _escape_md(f"{r['price']:,}")
-            vol_str   = _escape_md(r["vol_grade"])
-            vol_ratio = _escape_md(str(r["vol_ratio"]))
-            lines.append(
-                f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
-                f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
-                f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)"
-            )
+            lines.append(_signal_lines(r))
 
     if sell_list:
         lines.append(f"\n🔴 *매도 신호 {len(sell_list)}개*")
         for r in sell_list:
-            vi = _vol_icon(r["vol_grade"])
-            price_str = _escape_md(f"{r['price']:,}")
-            vol_str   = _escape_md(r["vol_grade"])
-            vol_ratio = _escape_md(str(r["vol_ratio"]))
-            lines.append(
-                f"• {_escape_md(r['name'])} \\({_escape_md(r['ticker'])}\\)\n"
-                f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
-                f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)"
-            )
+            lines.append(_signal_lines(r))
 
     if not buy_list and not sell_list:
         lines.append("\n✅ 오늘은 매수/매도 신호 없음 \\(관망\\)")
@@ -414,23 +418,22 @@ def print_report(results: list[dict]):
     print(f"  일일 신호 체크 — {today}")
     print(f"{'='*65}")
 
+    def _print_row(r: dict):
+        vi = vol_icon.get(r["vol_grade"], "")
+        print(f"  {r['ticker']} {r['name']:12s} | "
+              f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
+              f"거래량: {vi}{r['vol_grade']}({r['vol_ratio']}배) | "
+              f"재무: {r['f_icon']} {r['f_desc']}")
+
     if buy_list:
         print(f"\n🟢 매수 신호 {len(buy_list)}개")
         for r in buy_list:
-            vi = vol_icon.get(r["vol_grade"], "")
-            print(f"  {r['ticker']} {r['name']:12s} | "
-                  f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
-                  f"BB: {r['bb_position']:8s} | "
-                  f"거래량: {vi} {r['vol_grade']}({r['vol_ratio']}배)")
+            _print_row(r)
 
     if sell_list:
         print(f"\n🔴 매도 신호 {len(sell_list)}개")
         for r in sell_list:
-            vi = vol_icon.get(r["vol_grade"], "")
-            print(f"  {r['ticker']} {r['name']:12s} | "
-                  f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
-                  f"BB: {r['bb_position']:8s} | "
-                  f"거래량: {vi} {r['vol_grade']}({r['vol_ratio']}배)")
+            _print_row(r)
 
     if not buy_list and not sell_list:
         print("\n  오늘은 신호 없음 (관망)")
