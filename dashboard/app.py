@@ -1,3 +1,4 @@
+from datetime import date as _date
 from pathlib import Path
 import sys
 
@@ -15,6 +16,7 @@ from backend.strategy.signal import generate_signals, BUY, SELL
 from backend.stocks import get_name as stocks_get_name, get_market, ALL_STOCKS
 from backend.stocks_us import get_us_name, ALL_US_STOCKS
 from backend.database import init_db, add_position, get_open_positions, close_position, update_position, delete_position, get_position_history
+from backend.scheduler.valuation import score_value_kr, score_value_us, score_oversold, value_opportunity_score
 from tests.backtest import run_backtest
 
 
@@ -146,6 +148,62 @@ def build_chart_us(df: pd.DataFrame) -> go.Figure:
     fig = build_chart(df)
     fig.update_yaxes(title_text="주가 ($)", row=1, col=1)
     return fig
+
+
+def _bb_pos_from_row(row) -> str:
+    """DataFrame 마지막 행에서 볼린저밴드 위치 계산."""
+    close, upper, lower, mid = row["close"], row["bb_upper"], row["bb_lower"], row["bb_middle"]
+    if close <= lower:  return "하단 이탈"
+    if close >= upper:  return "상단 돌파"
+    if close < mid:     return "중간 아래"
+    return "중간 위"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _run_value_screen(tickers: tuple, is_us: bool) -> list[dict]:
+    """가치+과매도 종합 스크리닝 (캐시 1시간)."""
+    rows = []
+    for ticker in tickers:
+        try:
+            csv_path = get_default_csv_path(ticker)
+            df = pd.read_csv(csv_path)
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+            df = add_all_indicators(df, rsi_period=14, bb_period=20, bb_std_dev=2.0,
+                                    ma_short=10, ma_long=30)
+            df = df.dropna()
+            if df.empty:
+                continue
+            last = df.iloc[-1]
+            rsi = round(float(last["rsi"]), 1)
+            bb_pos = _bb_pos_from_row(last)
+            price = float(last["close"])
+
+            if is_us:
+                fundamental = score_value_us(ticker)
+            else:
+                fundamental = score_value_kr(ticker)
+
+            oversold = score_oversold(rsi, bb_pos)
+            combined = value_opportunity_score(fundamental, oversold)
+
+            rows.append({
+                "티커":     ticker,
+                "종목명":   get_ticker_name(ticker),
+                "종합점수": combined["score"],
+                "등급":     f"{combined['icon']} {combined['grade']}",
+                "가치점수": fundamental["score"],
+                "과매도":   oversold["score"],
+                "PER":      fundamental.get("per"),
+                "PBR":      fundamental.get("pbr"),
+                "ROE(%)":   fundamental.get("roe"),
+                "RSI":      rsi,
+                "BB위치":   bb_pos,
+                "현재가":   price,
+            })
+        except Exception:
+            pass
+    return sorted(rows, key=lambda r: r["종합점수"], reverse=True)
 
 
 # ──────────────────────────────────────────
@@ -297,48 +355,49 @@ with tab_backtest:
 # ══════════════════════════════════════════
 
 with tab_screener:
-    st.subheader("🔍 단타/스윙 종목 추천")
-    st.caption("다운로드된 종목들을 현재 파라미터로 일괄 백테스트해서 수익률 순으로 추천합니다.")
+    screen_mode = st.radio(
+        "스크리닝 모드",
+        ["📈 단타/스윙 추천", "💎 가치 과매도"],
+        horizontal=True,
+        help="단타/스윙: 백테스트 수익률 기준 | 가치 과매도: PER/PBR/ROE + RSI+BB 과매도 종합 점수",
+    )
+    if screen_mode == "📈 단타/스윙 추천":
+        st.caption("다운로드된 종목들을 현재 파라미터로 일괄 백테스트해서 수익률 순으로 추천합니다.")
+    else:
+        st.caption("기업 실적 대비 저평가 + 기술적 과매도 종목을 종합 점수로 추천합니다. (가치 50pt + 과매도 50pt = 100pt)")
 
     if not available_tickers:
         st.warning("data/ 폴더에 종목 데이터가 없습니다. 먼저 여러 종목을 다운로드하세요.")
         st.stop()
 
-    # ── 필터 행 ──
+    # ── 공통 필터 ──
     filter_col1, filter_col2, filter_col3 = st.columns([1.2, 1.2, 2])
-
     with filter_col1:
         market_filter = st.radio(
             "시장",
             options=["전체", "코스피", "코스닥"],
             horizontal=True,
-            help="코스닥은 변동성이 높아 단타/스윙에 유리합니다.",
         )
-
     with filter_col2:
         min_volatility = st.slider(
-            "최소 변동성 (%)",
-            min_value=0, max_value=80, value=0, step=5,
+            "최소 변동성 (%)", min_value=0, max_value=80, value=0, step=5,
             help="연환산 변동성. 높을수록 주가 움직임이 큼. 코스닥 평균 40~60%.",
         )
-
     with filter_col3:
         search_query = st.text_input(
             "🔎 종목 검색",
             placeholder="종목코드 또는 종목명 (예: 005930, 삼성, HLB)",
-            help="비워두면 전체 스캔.",
         )
 
-    # 스캔 대상 필터링
     def _ticker_matches(ticker: str, query: str, market: str) -> bool:
         code = ticker.split(".")[0]
-        mkt = get_market(code)  # "KOSPI" / "KOSDAQ" / ""
-
+        if _is_us(ticker):
+            return False  # KR 전용 탭에서는 US 종목 제외
+        mkt = get_market(code)
         if market == "코스피" and mkt != "KOSPI":
             return False
         if market == "코스닥" and mkt != "KOSDAQ":
             return False
-
         q = query.strip().lower()
         if not q:
             return True
@@ -349,127 +408,177 @@ with tab_screener:
         t for t in available_tickers if _ticker_matches(t, search_query, market_filter)
     ]
 
-    col_a, col_b = st.columns([1, 3])
-    with col_a:
-        min_trades = st.number_input("최소 거래 횟수", min_value=1, value=2,
-                                      help="이 횟수 이상 거래한 종목만 표시합니다.")
-        run_screen = st.button("🚀 스크리닝 시작", use_container_width=True)
+    # ══ 단타/스윙 모드 ══
+    if screen_mode == "📈 단타/스윙 추천":
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            min_trades = st.number_input("최소 거래 횟수", min_value=1, value=2,
+                                          help="이 횟수 이상 거래한 종목만 표시합니다.")
+            run_screen = st.button("🚀 스크리닝 시작", use_container_width=True)
+        with col_b:
+            kosdaq_count = sum(1 for t in tickers_to_scan if get_market(t.split(".")[0]) == "KOSDAQ")
+            kospi_count = len(tickers_to_scan) - kosdaq_count
+            st.info(
+                f"📋 스캔 대상: **{len(tickers_to_scan)}개** "
+                f"(코스피 {kospi_count} / 코스닥 {kosdaq_count})  |  "
+                f"모드: **{'⚡ 단타' if swing_mode else '🐢 보수'}**"
+            )
 
-    with col_b:
-        kosdaq_count = sum(1 for t in tickers_to_scan if get_market(t.split(".")[0]) == "KOSDAQ")
-        kospi_count = len(tickers_to_scan) - kosdaq_count
-        st.info(
-            f"📋 스캔 대상: **{len(tickers_to_scan)}개** "
-            f"(코스피 {kospi_count} / 코스닥 {kosdaq_count})  |  "
-            f"모드: **{'⚡ 단타' if swing_mode else '🐢 보수'}**"
-        )
+        if not tickers_to_scan:
+            st.warning("조건에 맞는 종목이 없습니다. 시장 필터나 검색어를 바꿔보세요.")
+        elif run_screen:
+            rows = []
+            progress = st.progress(0, text="스크리닝 중...")
+            for i, ticker in enumerate(tickers_to_scan):
+                progress.progress((i + 1) / len(tickers_to_scan), text=f"분석 중: {ticker_label(ticker)}")
+                try:
+                    res = run_backtest(
+                        ticker=ticker, initial_capital=initial_capital, data_source="csv",
+                        rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought,
+                        rsi_period=rsi_period, bb_period=bb_period, bb_std_dev=bb_std_dev,
+                        ma_short=ma_short, ma_long=ma_long, swing_mode=swing_mode, verbose=False,
+                    )
+                    code = ticker.split(".")[0]
+                    rows.append({
+                        "시장": get_market(code) or "—",
+                        "종목코드": code,
+                        "종목명": get_ticker_name(ticker),
+                        "변동성 (%)": get_stock_volatility(ticker),
+                        "수익률 (%)": round(res["total_return_pct"], 2),
+                        "MDD (%)": round(res["mdd_pct"], 2),
+                        "거래 횟수": res["trade_count"],
+                        "승률 (%)": round(res["win_rate"], 1),
+                        "평균 보유일": round(res["avg_hold_days"], 1),
+                        "최종 자본 (원)": int(res["final_capital"]),
+                    })
+                except Exception:
+                    pass
+            progress.empty()
 
-    if not tickers_to_scan:
-        st.warning("조건에 맞는 종목이 없습니다. 시장 필터나 검색어를 바꿔보세요.")
-    elif run_screen:
-        rows = []
-        progress = st.progress(0, text="스크리닝 중...")
+            if not rows:
+                st.error("결과가 없습니다.")
+            else:
+                df_result = pd.DataFrame(rows)
+                df_filtered = df_result[
+                    (df_result["거래 횟수"] >= min_trades)
+                    & (df_result["변동성 (%)"] >= min_volatility)
+                ].sort_values("수익률 (%)", ascending=False).reset_index(drop=True)
 
-        for i, ticker in enumerate(tickers_to_scan):
-            progress.progress((i + 1) / len(tickers_to_scan), text=f"분석 중: {ticker_label(ticker)}")
-            try:
-                res = run_backtest(
-                    ticker=ticker,
-                    initial_capital=initial_capital,
-                    data_source="csv",
-                    rsi_oversold=rsi_oversold,
-                    rsi_overbought=rsi_overbought,
-                    rsi_period=rsi_period,
-                    bb_period=bb_period,
-                    bb_std_dev=bb_std_dev,
-                    ma_short=ma_short,
-                    ma_long=ma_long,
-                    swing_mode=swing_mode,
-                    verbose=False,
+                st.success(f"✅ {len(tickers_to_scan)}개 종목 스캔 완료 — 조건 충족 {len(df_filtered)}개")
+
+                if not df_filtered.empty:
+                    top = df_filtered.head(15)
+                    colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in top["수익률 (%)"]]
+                    fig_bar = go.Figure(go.Bar(
+                        x=top["종목명"] + "<br>" + top["종목코드"],
+                        y=top["수익률 (%)"],
+                        marker_color=colors,
+                        text=[f"{v:+.2f}%" for v in top["수익률 (%)"]],
+                        textposition="outside",
+                    ))
+                    fig_bar.update_layout(
+                        title="수익률 상위 종목 (최대 15개)",
+                        height=380, margin={"t": 50, "b": 20},
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                result_filter = st.text_input(
+                    "📌 결과 내 검색", placeholder="종목코드 또는 종목명",
+                    key="result_filter",
                 )
-                code = ticker.split(".")[0]
-                rows.append({
-                    "시장": get_market(code) or "—",
-                    "종목코드": code,
-                    "종목명": get_ticker_name(ticker),
-                    "변동성 (%)": get_stock_volatility(ticker),
-                    "수익률 (%)": round(res["total_return_pct"], 2),
-                    "MDD (%)": round(res["mdd_pct"], 2),
-                    "거래 횟수": res["trade_count"],
-                    "승률 (%)": round(res["win_rate"], 1),
-                    "평균 보유일": round(res["avg_hold_days"], 1),
-                    "최종 자본 (원)": int(res["final_capital"]),
-                })
-            except Exception:
-                pass
+                if result_filter.strip():
+                    q = result_filter.strip().lower()
+                    df_display = df_filtered[
+                        df_filtered["종목코드"].str.lower().str.contains(q)
+                        | df_filtered["종목명"].str.lower().str.contains(q)
+                    ].reset_index(drop=True)
+                else:
+                    df_display = df_filtered
 
-        progress.empty()
+                st.dataframe(
+                    df_display.style.format({
+                        "변동성 (%)": "{:.1f}", "수익률 (%)": "{:+.2f}",
+                        "MDD (%)": "{:+.2f}", "승률 (%)": "{:.1f}",
+                        "최종 자본 (원)": "{:,.0f}",
+                    })
+                    .background_gradient(subset=["수익률 (%)"], cmap="RdYlGn")
+                    .background_gradient(subset=["변동성 (%)"], cmap="YlOrRd"),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "💡 **수익률↑ + 거래 횟수↑** = 이 전략에 잘 맞는 종목  |  "
+                    "코스닥 고변동성 종목은 단타/스윙 모드와 함께 사용하세요."
+                )
 
-        if not rows:
-            st.error("결과가 없습니다.")
-        else:
-            df_result = pd.DataFrame(rows)
-            df_filtered = df_result[
-                (df_result["거래 횟수"] >= min_trades)
-                & (df_result["변동성 (%)"] >= min_volatility)
-            ].sort_values("수익률 (%)", ascending=False).reset_index(drop=True)
+    # ══ 가치 과매도 모드 ══
+    else:
+        kr_tickers_to_scan = tickers_to_scan  # 이미 US 제외됨
 
-            st.success(f"✅ {len(tickers_to_scan)}개 종목 스캔 완료 — 조건 충족 {len(df_filtered)}개")
+        val_col_a, val_col_b = st.columns([1, 3])
+        with val_col_a:
+            min_val_score = st.slider("최소 종합점수", 0, 100, 40,
+                                      help="종합점수 = 가치점수(50pt) + 과매도점수(50pt)")
+            run_val = st.button("💎 가치 스크리닝 시작", use_container_width=True)
+        with val_col_b:
+            st.info(
+                f"📋 스캔 대상: **{len(kr_tickers_to_scan)}개**  |  "
+                "가치점수: PER/PBR/EPS 기반 (0~60pt → 50pt 환산)  |  "
+                "과매도점수: RSI+BB 기반 (0~50pt)"
+            )
 
-            # 상위 바 차트
-            if not df_filtered.empty:
-                top = df_filtered.head(15)
-                colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in top["수익률 (%)"]]
-                fig_bar = go.Figure(go.Bar(
-                    x=top["종목명"] + "<br>" + top["종목코드"],
-                    y=top["수익률 (%)"],
-                    marker_color=colors,
-                    text=[f"{v:+.2f}%" for v in top["수익률 (%)"]],
+        if not kr_tickers_to_scan:
+            st.warning("조건에 맞는 종목이 없습니다.")
+        elif run_val:
+            with st.spinner("가치 + 과매도 분석 중... (첫 실행 시 시간이 걸릴 수 있습니다)"):
+                val_rows = _run_value_screen(tuple(kr_tickers_to_scan), is_us=False)
+
+            val_rows = [r for r in val_rows
+                        if r["종합점수"] >= min_val_score
+                        and get_stock_volatility(r["티커"]) >= min_volatility]
+
+            st.success(f"✅ {len(kr_tickers_to_scan)}개 스캔 완료 — 점수 {min_val_score}pt 이상 {len(val_rows)}개")
+
+            if val_rows:
+                val_df = pd.DataFrame(val_rows)
+                val_df["종목코드"] = val_df["티커"].str.split(".").str[0]
+
+                # 상위 바 차트 (종합점수)
+                top_v = val_df.head(15)
+                score_colors = ["#f39c12" if s >= 75 else "#27ae60" if s >= 60
+                                else "#3498db" if s >= 45 else "#95a5a6"
+                                for s in top_v["종합점수"]]
+                fig_val = go.Figure(go.Bar(
+                    x=top_v["종목명"] + "<br>" + top_v["종목코드"],
+                    y=top_v["종합점수"],
+                    marker_color=score_colors,
+                    text=top_v["등급"],
                     textposition="outside",
                 ))
-                fig_bar.update_layout(
-                    title="수익률 상위 종목 (최대 15개)",
-                    xaxis_title="종목코드",
-                    yaxis_title="수익률 (%)",
-                    height=380,
-                    margin={"t": 50, "b": 20},
+                fig_val.update_layout(
+                    title="가치 과매도 상위 종목 (최대 15개)",
+                    yaxis_title="종합점수 (0~100)",
+                    height=380, margin={"t": 50, "b": 20},
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_val, use_container_width=True)
 
-            # 결과 내 재검색
-            result_filter = st.text_input(
-                "📌 결과 내 검색",
-                placeholder="종목코드 또는 종목명으로 결과 필터링",
-                key="result_filter",
-            )
-            if result_filter.strip():
-                q = result_filter.strip().lower()
-                df_display = df_filtered[
-                    df_filtered["종목코드"].str.lower().str.contains(q)
-                    | df_filtered["종목명"].str.lower().str.contains(q)
-                ].reset_index(drop=True)
-            else:
-                df_display = df_filtered
-
-            # 전체 테이블
-            st.dataframe(
-                df_display.style.format({
-                    "변동성 (%)": "{:.1f}",
-                    "수익률 (%)": "{:+.2f}",
-                    "MDD (%)": "{:+.2f}",
-                    "승률 (%)": "{:.1f}",
-                    "최종 자본 (원)": "{:,.0f}",
-                })
-                .background_gradient(subset=["수익률 (%)"], cmap="RdYlGn")
-                .background_gradient(subset=["변동성 (%)"], cmap="YlOrRd"),
-                use_container_width=True,
-            )
-
-            st.caption(
-                "💡 **수익률↑ + 거래 횟수↑** = 이 전략에 잘 맞는 종목  |  "
-                "**변동성↑** = 주가 움직임이 크다 (코스닥 평균 40~60%)  |  "
-                "코스닥 고변동성 종목은 단타/스윙 모드와 함께 사용하세요."
-            )
+                # 결과 테이블
+                display_cols = ["등급", "종목명", "종목코드", "종합점수", "가치점수", "과매도", "PER", "PBR", "RSI", "BB위치", "현재가"]
+                val_display = val_df[display_cols].copy()
+                st.dataframe(
+                    val_display.style.format({
+                        "종합점수": "{:.0f}", "가치점수": "{:.0f}", "과매도": "{:.0f}",
+                        "PER": lambda x: f"{x:.1f}" if x else "N/A",
+                        "PBR": lambda x: f"{x:.2f}" if x else "N/A",
+                        "RSI": "{:.1f}", "현재가": "{:,.0f}",
+                    })
+                    .background_gradient(subset=["종합점수"], cmap="RdYlGn")
+                    .background_gradient(subset=["RSI"], cmap="RdYlGn_r"),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "💡 **🔥 강력매수**: 75pt+  |  **✅ 매수유망**: 60pt+  |  **👀 관심종목**: 45pt+  |  "
+                    "PER/PBR이 낮고 RSI가 낮을수록 '저평가 과매도' 우량주입니다."
+                )
 
 
 # ══════════════════════════════════════════
@@ -485,7 +594,6 @@ with tab_portfolio:
     positions = get_open_positions()
 
     if positions:
-        from datetime import date as _date
         total_invested = sum(p["entry_price"] * p["shares"] for p in positions)
         st.caption(f"총 {len(positions)}개 종목 보유 중 | 총 투자금: {total_invested:,.0f}원")
 
@@ -787,78 +895,145 @@ with tab_us:
 
     st.divider()
 
-    # ── 단타 종목 추천 ─────────────────────
-    st.markdown("### 🔍 단타 종목 추천")
+    # ── 종목 추천 (모드 선택) ─────────────────────
+    st.markdown("### 🔍 종목 추천")
 
     if not us_tickers:
         st.info("다운로드된 미국 종목이 없어 스캔할 수 없습니다.")
     else:
+        us_screen_mode = st.radio(
+            "스크리닝 모드",
+            ["📈 단타/스윙 추천", "💎 가치 과매도"],
+            horizontal=True,
+            key="us_screen_mode",
+            help="단타/스윙: 백테스트 수익률 기준 | 가치 과매도: PER/PBR/ROE/EPS성장 + RSI+BB 종합 점수",
+        )
+
         us_search = st.text_input("🔎 종목 검색", placeholder="예: AAPL, 엔비디아",
                                    key="us_search")
-        us_min_trades = st.number_input("최소 거래 횟수", min_value=1, value=2, key="us_min_trades")
-        us_run = st.button("🚀 미국 종목 스캔", use_container_width=True)
-
         q = us_search.strip().lower()
         us_scan = [
             t for t in us_tickers
             if not q or q in t.lower() or q in get_ticker_name(t).lower()
         ]
 
-        st.info(f"📋 스캔 대상: **{len(us_scan)}개** | 모드: **{'⚡ 단타' if swing_mode else '🐢 보수'}**")
+        # ══ 단타/스윙 모드 ══
+        if us_screen_mode == "📈 단타/스윙 추천":
+            us_min_trades = st.number_input("최소 거래 횟수", min_value=1, value=2, key="us_min_trades")
+            us_run = st.button("🚀 미국 종목 스캔", use_container_width=True)
+            st.info(f"📋 스캔 대상: **{len(us_scan)}개** | 모드: **{'⚡ 단타' if swing_mode else '🐢 보수'}**")
 
-        if us_run:
-            us_rows = []
-            us_prog = st.progress(0, text="스캔 중...")
-            for i, t in enumerate(us_scan):
-                us_prog.progress((i + 1) / len(us_scan), text=f"분석 중: {ticker_label(t)}")
-                try:
-                    r = run_backtest(
-                        ticker=t, initial_capital=10000, data_source="csv",
-                        rsi_oversold=us_rsi_os, rsi_overbought=us_rsi_ob,
-                        rsi_period=us_rsi_p, bb_period=us_bb_p, bb_std_dev=us_bb_std,
-                        ma_short=us_ma_s, ma_long=us_ma_l, swing_mode=swing_mode, verbose=False,
+            if us_run:
+                us_rows = []
+                us_prog = st.progress(0, text="스캔 중...")
+                for i, t in enumerate(us_scan):
+                    us_prog.progress((i + 1) / len(us_scan), text=f"분석 중: {ticker_label(t)}")
+                    try:
+                        r = run_backtest(
+                            ticker=t, initial_capital=10000, data_source="csv",
+                            rsi_oversold=us_rsi_os, rsi_overbought=us_rsi_ob,
+                            rsi_period=us_rsi_p, bb_period=us_bb_p, bb_std_dev=us_bb_std,
+                            ma_short=us_ma_s, ma_long=us_ma_l, swing_mode=swing_mode, verbose=False,
+                        )
+                        us_rows.append({
+                            "티커":       t,
+                            "종목명":     get_ticker_name(t),
+                            "수익률 (%)": round(r["total_return_pct"], 2),
+                            "MDD (%)":    round(r["mdd_pct"], 2),
+                            "거래 횟수":  r["trade_count"],
+                            "승률 (%)":   round(r["win_rate"], 1),
+                            "최종 자본($)": round(r["final_capital"], 2),
+                        })
+                    except Exception:
+                        pass
+                us_prog.empty()
+
+                if us_rows:
+                    us_df_result = pd.DataFrame(us_rows)
+                    us_df_filtered = us_df_result[
+                        us_df_result["거래 횟수"] >= us_min_trades
+                    ].sort_values("수익률 (%)", ascending=False).reset_index(drop=True)
+
+                    st.success(f"✅ {len(us_scan)}개 스캔 완료 — 조건 충족 {len(us_df_filtered)}개")
+
+                    if not us_df_filtered.empty:
+                        top = us_df_filtered.head(15)
+                        colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in top["수익률 (%)"]]
+                        us_fig_bar = go.Figure(go.Bar(
+                            x=top["종목명"] + "<br>" + top["티커"],
+                            y=top["수익률 (%)"],
+                            marker_color=colors,
+                            text=[f"{v:+.2f}%" for v in top["수익률 (%)"]],
+                            textposition="outside",
+                        ))
+                        us_fig_bar.update_layout(title="수익률 상위 (최대 15개)",
+                                                 height=350, margin={"t": 50, "b": 20})
+                        st.plotly_chart(us_fig_bar, use_container_width=True)
+
+                    st.dataframe(
+                        us_df_filtered.style.format({
+                            "수익률 (%)":  "{:+.2f}",
+                            "MDD (%)":     "{:+.2f}",
+                            "승률 (%)":    "{:.1f}",
+                            "최종 자본($)": "{:,.2f}",
+                        }).background_gradient(subset=["수익률 (%)"], cmap="RdYlGn"),
+                        use_container_width=True,
                     )
-                    us_rows.append({
-                        "티커":       t,
-                        "종목명":     get_ticker_name(t),
-                        "수익률 (%)": round(r["total_return_pct"], 2),
-                        "MDD (%)":    round(r["mdd_pct"], 2),
-                        "거래 횟수":  r["trade_count"],
-                        "승률 (%)":   round(r["win_rate"], 1),
-                        "최종 자본($)": round(r["final_capital"], 2),
-                    })
-                except Exception:
-                    pass
-            us_prog.empty()
 
-            if us_rows:
-                us_df_result = pd.DataFrame(us_rows)
-                us_df_filtered = us_df_result[
-                    us_df_result["거래 횟수"] >= us_min_trades
-                ].sort_values("수익률 (%)", ascending=False).reset_index(drop=True)
+        # ══ 가치 과매도 모드 ══
+        else:
+            us_min_val_score = st.slider("최소 종합점수", 0, 100, 40, key="us_min_val",
+                                         help="가치점수(50pt) + 과매도점수(50pt) = 100pt 만점")
+            us_run_val = st.button("💎 가치 스크리닝 시작", use_container_width=True, key="us_run_val")
+            st.info(
+                f"📋 스캔 대상: **{len(us_scan)}개**  |  "
+                "가치점수: PER/PBR/ROE/EPS성장/부채비율 기반 (0~100pt → 50pt 환산)  |  "
+                "과매도점수: RSI+BB 기반 (0~50pt)"
+            )
 
-                st.success(f"✅ {len(us_scan)}개 스캔 완료 — 조건 충족 {len(us_df_filtered)}개")
+            if us_run_val:
+                with st.spinner("가치 + 과매도 분석 중... (yfinance 조회로 시간이 걸릴 수 있습니다)"):
+                    us_val_rows = _run_value_screen(tuple(us_scan), is_us=True)
 
-                if not us_df_filtered.empty:
-                    top = us_df_filtered.head(15)
-                    colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in top["수익률 (%)"]]
-                    us_fig_bar = go.Figure(go.Bar(
-                        x=top["종목명"] + "<br>" + top["티커"],
-                        y=top["수익률 (%)"],
-                        marker_color=colors,
-                        text=[f"{v:+.2f}%" for v in top["수익률 (%)"]],
+                us_val_rows = [r for r in us_val_rows if r["종합점수"] >= us_min_val_score]
+                st.success(f"✅ {len(us_scan)}개 스캔 완료 — 점수 {us_min_val_score}pt 이상 {len(us_val_rows)}개")
+
+                if us_val_rows:
+                    us_val_df = pd.DataFrame(us_val_rows)
+
+                    top_v = us_val_df.head(15)
+                    score_colors = ["#f39c12" if s >= 75 else "#27ae60" if s >= 60
+                                    else "#3498db" if s >= 45 else "#95a5a6"
+                                    for s in top_v["종합점수"]]
+                    fig_us_val = go.Figure(go.Bar(
+                        x=top_v["종목명"] + "<br>" + top_v["티커"],
+                        y=top_v["종합점수"],
+                        marker_color=score_colors,
+                        text=top_v["등급"],
                         textposition="outside",
                     ))
-                    us_fig_bar.update_layout(title="수익률 상위 (최대 15개)",
-                                             height=350, margin={"t": 50, "b": 20})
-                    st.plotly_chart(us_fig_bar, use_container_width=True)
+                    fig_us_val.update_layout(
+                        title="가치 과매도 상위 종목 (최대 15개)",
+                        yaxis_title="종합점수 (0~100)",
+                        height=380, margin={"t": 50, "b": 20},
+                    )
+                    st.plotly_chart(fig_us_val, use_container_width=True)
 
-                st.dataframe(
-                    us_df_filtered.style.format({
-                        "수익률 (%)":  "{:+.2f}",
-                        "MDD (%)":     "{:+.2f}",
-                        "승률 (%)":    "{:.1f}",
-                        "최종 자본($)": "{:,.2f}",
-                    }).background_gradient(subset=["수익률 (%)"], cmap="RdYlGn"),
-                    use_container_width=True,
-                )
+                    display_cols = ["등급", "종목명", "티커", "종합점수", "가치점수", "과매도",
+                                    "PER", "PBR", "ROE(%)", "RSI", "BB위치", "현재가"]
+                    st.dataframe(
+                        us_val_df[display_cols].style.format({
+                            "종합점수": "{:.0f}", "가치점수": "{:.0f}", "과매도": "{:.0f}",
+                            "PER": lambda x: f"{x:.1f}" if x else "N/A",
+                            "PBR": lambda x: f"{x:.2f}" if x else "N/A",
+                            "ROE(%)": lambda x: f"{x:.1f}%" if x else "N/A",
+                            "RSI": "{:.1f}", "현재가": "{:,.2f}",
+                        })
+                        .background_gradient(subset=["종합점수"], cmap="RdYlGn")
+                        .background_gradient(subset=["RSI"], cmap="RdYlGn_r"),
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "💡 **🔥 강력매수**: 75pt+  |  **✅ 매수유망**: 60pt+  |  **👀 관심종목**: 45pt+  |  "
+                        "ROE↑ + PER↓ + RSI↓ 조합이 이상적인 저평가 과매도 종목입니다."
+                    )

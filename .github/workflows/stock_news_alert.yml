@@ -1,0 +1,42 @@
+name: 종목 호재 뉴스 알림
+
+on:
+  schedule:
+    # 15분마다 실행
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  stock-news-alert:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install python-dotenv requests
+
+      - name: seen 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .stock_news_seen_nvda.txt
+          key: stock-news-seen-nvda-${{ github.run_id }}
+          restore-keys: |
+            stock-news-seen-nvda-
+
+      - name: 호재 뉴스 알림 실행
+        env:
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
+          FINNHUB_API_KEY:      ${{ secrets.FINNHUB_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python tests/stock_news_alert.py

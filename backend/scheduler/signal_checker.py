@@ -24,6 +24,7 @@ from backend.database import get_open_positions
 from backend.scheduler.fundamentals import get_fundamental, grade_fundamental
 from backend.scheduler.confidence import calc_confidence, score_bar
 from backend.scheduler.dart import get_earnings_warning_kr
+from backend.scheduler.valuation import score_value_kr, score_oversold, value_opportunity_score
 
 
 # 신호 체크에 필요한 최소 봉 수 (ma_long 기본 40 + 여유)
@@ -178,22 +179,30 @@ def check_signals_today(
             fund = get_fundamental(code)
             f_grade, f_icon, f_desc = grade_fundamental(fund)
             mkt_status = (market_trend or {}).get("status", "알 수 없음")
+            rsi_val = round(float(last["rsi"]), 1)
+            bb_pos  = _bb_position(last)
             confidence = calc_confidence(
                 signal=signal,
-                rsi=round(float(last["rsi"]), 1),
+                rsi=rsi_val,
                 rsi_oversold=rsi_oversold,
                 rsi_overbought=rsi_overbought,
                 vol_grade=vol_grade,
                 market_status=mkt_status,
                 f_grade=f_grade,
             )
+            try:
+                val_fund = score_value_kr(code)
+                val_over = score_oversold(rsi_val, bb_pos)
+                valuation = value_opportunity_score(val_fund, val_over)
+            except Exception:
+                valuation = None
             results.append({
                 "ticker":      code,
                 "name":        get_name(code),
                 "signal":      signal,
                 "price":       int(last["close"]),
-                "rsi":         round(float(last["rsi"]), 1),
-                "bb_position": _bb_position(last),
+                "rsi":         rsi_val,
+                "bb_position": bb_pos,
                 "vol_ratio":   vol_ratio,
                 "vol_grade":   vol_grade,
                 "fund":        fund,
@@ -201,6 +210,7 @@ def check_signals_today(
                 "f_icon":      f_icon,
                 "f_desc":      f_desc,
                 "confidence":  confidence,
+                "valuation":   valuation,
                 "earnings":    get_earnings_warning_kr(code),
                 "date":        df.index[-1].strftime("%Y-%m-%d"),
             })
@@ -262,22 +272,30 @@ def send_signal_report(
         return f"https://finance.naver.com/item/main.naver?code={ticker.zfill(6)}"
 
     def _signal_lines(r: dict) -> str:
-        vi    = _vol_icon(r["vol_grade"])
-        c     = r["confidence"]
-        bar   = _escape_md(score_bar(c["score"], width=8))
-        score = _escape_md(str(c["score"]))
-        price_str = _escape_md(f"{r['price']:,}")
-        vol_str   = _escape_md(r["vol_grade"])
+        vi        = _vol_icon(r["vol_grade"])
+        c         = r["confidence"]
+        score     = _escape_md(str(c["score"]))
+        price_str = _escape_md(f"{r['price']:,}원")
         vol_ratio = _escape_md(str(r["vol_ratio"]))
-        f_desc    = _escape_md(r["f_desc"])
+        rsi_str   = _escape_md(str(r["rsi"]))
         name_link = f"[{_escape_md(r['name'])}]({_naver_url(r['ticker'])})"
+        bb_abbr   = {"하단 이탈": "BB↓", "상단 돌파": "BB↑"}.get(r["bb_position"], "")
+
+        tokens = [price_str, f"RSI {rsi_str}"]
+        if bb_abbr:
+            tokens.append(_escape_md(bb_abbr))
+        tokens.append(f"{vi}{vol_ratio}배")
+        tokens.append(r["f_icon"])
+        v = r.get("valuation")
+        if v:
+            tokens.append(f"{v['icon']}{_escape_md(str(v['score']))}pt")
+
         e = r.get("earnings", {})
-        earnings_line = f"\n  {_escape_md(e['label'])}" if e.get("warning") else ""
+        earnings_line = f"\n  _{_escape_md(e['label'])}_" if e.get("warning") else ""
+
         return (
-            f"• {name_link} \\({_escape_md(r['ticker'])}\\)  "
-            f"{c['icon']} *{score}점* `{bar}`\n"
-            f"  현재가: {price_str}원  RSI: {_escape_md(str(r['rsi']))}  BB: {_escape_md(r['bb_position'])}\n"
-            f"  거래량: {vi} {vol_str} \\({vol_ratio}배\\)  재무: {r['f_icon']} {f_desc}"
+            f"• {name_link} \\({_escape_md(r['ticker'])}\\) {c['icon']} *{score}점*\n"
+            f"  {' · '.join(tokens)}"
             f"{earnings_line}"
         )
 
@@ -455,11 +473,13 @@ def print_report(results: list[dict]):
         vi = vol_icon.get(r["vol_grade"], "")
         c  = r["confidence"]
         bar = score_bar(c["score"], width=8)
+        v  = r.get("valuation")
+        val_str = f" | 가치: {v['icon']}{v['grade']} {v['score']}pt" if v else ""
         print(f"  {r['ticker']} {r['name']:12s} | "
               f"신뢰도: {c['icon']}{c['score']:>3}점 [{bar}] | "
               f"현재가: {r['price']:>8,}원 | RSI: {r['rsi']:>5} | "
               f"거래량: {vi}{r['vol_grade']}({r['vol_ratio']}배) | "
-              f"재무: {r['f_icon']} {r['f_desc']}")
+              f"재무: {r['f_icon']} {r['f_desc']}{val_str}")
         e = r.get("earnings", {})
         if e.get("warning"):
             print(f"    {e['label']}")

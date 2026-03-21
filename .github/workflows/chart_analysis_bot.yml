@@ -1,0 +1,43 @@
+name: 주식 차트 분석 봇
+
+on:
+  schedule:
+    # 5분마다 실행 (채널 /분석 명령 폴링)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  chart-bot:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests anthropic matplotlib
+
+      - name: offset 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .chart_bot_offset.txt
+          key: chart-bot-offset-${{ github.run_id }}
+          restore-keys: |
+            chart-bot-offset-
+
+      - name: 차트 분석 봇 실행
+        env:
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
+          FINNHUB_API_KEY:      ${{ secrets.FINNHUB_API_KEY }}
+          NEWS_API_KEY:         ${{ secrets.NEWS_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python tests/chart_analysis_bot.py
