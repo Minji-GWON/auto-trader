@@ -8,6 +8,7 @@
     /분석 005930      — 한국 주식 차트 + 기술분석 + 뉴스
 """
 
+import json
 import os
 import sys
 import io
@@ -28,7 +29,64 @@ from backend.indicators.calculator import add_all_indicators
 from backend.strategy.signal import generate_signals, BUY, SELL
 from backend.scheduler.finnhub_targets import get_analyst_summary
 
-OFFSET_FILE = ROOT / ".chart_bot_offset.txt"
+OFFSET_FILE     = ROOT / ".chart_bot_offset.txt"
+TICKER_SEEN_FILE = ROOT / ".chart_bot_ticker_seen.json"
+NEWS_SEEN_FILE   = ROOT / ".chart_bot_news_seen.json"
+_TICKER_COOLDOWN_MINUTES = 10
+_NEWS_MAX_ENTRIES = 200  # 오래된 기사 URL 정리 기준
+
+
+# ──────────────────────────────────────────
+# 티커 쿨다운 (같은 종목 10분 내 재요청 무시)
+# ──────────────────────────────────────────
+
+def _ticker_seen_load() -> dict:
+    try:
+        return json.loads(TICKER_SEEN_FILE.read_text())
+    except Exception:
+        return {}
+
+def _ticker_seen_save(data: dict):
+    TICKER_SEEN_FILE.write_text(json.dumps(data))
+
+def _ticker_is_cooldown(ticker: str) -> bool:
+    data = _ticker_seen_load()
+    ts = data.get(ticker)
+    if not ts:
+        return False
+    return (datetime.now(timezone.utc) - datetime.fromisoformat(ts)) \
+           < timedelta(minutes=_TICKER_COOLDOWN_MINUTES)
+
+def _ticker_mark(ticker: str):
+    data = _ticker_seen_load()
+    data[ticker] = datetime.now(timezone.utc).isoformat()
+    _ticker_seen_save(data)
+
+
+# ──────────────────────────────────────────
+# 뉴스 중복 방지 (이미 보낸 URL 필터링)
+# ──────────────────────────────────────────
+
+def _news_seen_load() -> list:
+    try:
+        return json.loads(NEWS_SEEN_FILE.read_text())
+    except Exception:
+        return []
+
+def _news_seen_save(urls: list):
+    NEWS_SEEN_FILE.write_text(json.dumps(urls[-_NEWS_MAX_ENTRIES:]))
+
+def filter_new_news(articles: list[dict]) -> list[dict]:
+    seen = set(_news_seen_load())
+    return [a for a in articles if a.get("url", "") not in seen]
+
+def mark_news_seen(articles: list[dict]):
+    seen = _news_seen_load()
+    for a in articles:
+        url = a.get("url", "")
+        if url and url not in seen:
+            seen.append(url)
+    _news_seen_save(seen)
 
 
 # ──────────────────────────────────────────
@@ -445,8 +503,20 @@ def run(token: str, channel_id: int,
         print("새 명령 없음.")
         return
 
+    # 같은 티커 중복 요청 → 마지막 1개만 처리
+    seen_tickers: dict[str, dict] = {}
+    for cmd in commands:
+        seen_tickers[cmd["ticker"]] = cmd
+    commands = list(seen_tickers.values())
+
     for cmd in commands:
         ticker = cmd["ticker"]
+
+        # 10분 내 동일 티커 재요청 → 스킵
+        if _ticker_is_cooldown(ticker):
+            print(f"[{ticker}] 쿨다운 중 (10분 내 이미 처리됨), 스킵")
+            continue
+
         print(f"[분석] {ticker} ...")
 
         # 1) 차트 생성
@@ -465,18 +535,22 @@ def run(token: str, channel_id: int,
             except Exception:
                 pass
 
-        # 3) 뉴스 수집 + 번역
+        # 3) 뉴스 수집 + 중복 필터 + 번역
         if analysis["is_kr"]:
             try:
                 from backend.stocks import get_name
                 company = get_name(ticker)
             except Exception:
                 company = ticker
-            news = fetch_kr_news(company, news_api_key, n=3)
+            raw_news = fetch_kr_news(company, news_api_key, n=5)
         else:
-            news = fetch_company_news(ticker, finnhub_key, n=3)
+            raw_news = fetch_company_news(ticker, finnhub_key, n=5)
 
-        summaries = summarize_to_korean(news, anthropic_key) if news else []
+        news = filter_new_news(raw_news)
+        if not news:
+            news = raw_news[:3]  # 모두 중복이면 최신 3개 표시
+
+        summaries = summarize_to_korean(news[:3], anthropic_key) if news else []
 
         # 4) 전송 — 차트(캡션) + 뉴스(별도 메시지)
         caption = build_caption(ticker, analysis, analyst)
@@ -484,6 +558,10 @@ def run(token: str, channel_id: int,
         print(f"  → 차트 {'전송 완료' if ok else '전송 실패'}")
 
         if news:
-            news_msg = build_news_message(ticker, news, summaries)
+            news_msg = build_news_message(ticker, news[:3], summaries)
             ok2 = send_message(token, channel_id, news_msg)
             print(f"  → 뉴스 {'전송 완료' if ok2 else '전송 실패'}")
+
+        if ok:
+            _ticker_mark(ticker)       # 쿨다운 시작
+            mark_news_seen(raw_news)   # 이번에 수집한 기사 URL 저장

@@ -25,13 +25,16 @@ jobs:
       - name: 의존성 설치
         run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests anthropic matplotlib
 
-      - name: offset 캐시 복원
+      - name: 캐시 복원
         uses: actions/cache@v4
         with:
-          path: .chart_bot_offset.txt
-          key: chart-bot-offset-${{ github.run_id }}
+          path: |
+            .chart_bot_offset.txt
+            .chart_bot_ticker_seen.json
+            .chart_bot_news_seen.json
+          key: chart-bot-${{ github.run_id }}
           restore-keys: |
-            chart-bot-offset-
+            chart-bot-
 
       - name: 차트 분석 봇 실행
         env:
