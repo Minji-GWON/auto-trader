@@ -2,8 +2,8 @@ name: 일일 매크로 시장 브리핑
 
 on:
   schedule:
-    # UTC 22:30 일~목 = KST 07:30 월~금 (장 시작 전 브리핑)
-    - cron: '30 22 * * 0-4'
+    # UTC 13:00 매일 = KST 22:00 매일 (미장 오픈 1시간 30분 전)
+    - cron: '0 13 * * *'
   workflow_dispatch:  # 수동 실행 가능
 
 jobs:
