@@ -1,0 +1,41 @@
+name: NVDA 장중 매수/매도 신호 알림
+
+on:
+  schedule:
+    # 미장 시간대: UTC 14:30~21:00 (EST 9:30~16:00 = KST 23:30~06:00)
+    # 15분마다 실행 (UTC 14:00~21:45, 월~금)
+    - cron: '*/15 14-21 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  intraday-signal:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests
+
+      # 중복 방지 캐시 복원
+      - name: 중복 방지 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .intraday_signal_seen.json
+          key: intraday-seen-${{ github.run_id }}
+          restore-keys: |
+            intraday-seen-
+
+      - name: NVDA 장중 신호 체크
+        env:
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
+        run: python tests/nvda_intraday_alert.py
