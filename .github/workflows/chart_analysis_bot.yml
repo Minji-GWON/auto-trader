@@ -2,8 +2,8 @@ name: 주식 차트 분석 봇
 
 on:
   schedule:
-    # 5분마다 실행 (채널 /분석 명령 폴링)
-    - cron: '*/5 * * * *'
+    # 15분마다 실행 (채널 /분석 명령 폴링) — Actions 사용량 절감
+    - cron: '*/15 * * * *'
   workflow_dispatch:  # 수동 실행 가능
 
 jobs:
