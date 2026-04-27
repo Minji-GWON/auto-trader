@@ -66,5 +66,22 @@ US_STOCKS: list[tuple[str, str]] = [
 ALL_US_STOCKS: dict[str, dict] = {ticker: {"name": name} for ticker, name in US_STOCKS}
 
 
+# 반도체 섹터 (프리/애프터마켓 알림용 — 유동성 높은 종목 위주)
+SEMI_TICKERS: list[str] = [
+    "NVDA",  # 엔비디아
+    "AMD",   # AMD
+    "AVGO",  # 브로드컴
+    "TSM",   # TSMC (ADR)
+    "ASML",  # ASML
+    "MU",    # 마이크론
+    "AMAT",  # 어플라이드머티리얼즈
+    "QCOM",  # 퀄컴
+    "INTC",  # 인텔
+    "ARM",   # ARM
+    "SMCI",  # 슈퍼마이크로
+    "MRVL",  # 마벨
+]
+
+
 def get_us_name(ticker: str) -> str:
     return ALL_US_STOCKS.get(ticker, {}).get("name", ticker)

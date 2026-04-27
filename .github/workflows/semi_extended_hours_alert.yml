@@ -1,0 +1,41 @@
+name: 반도체주 프리/애프터마켓 신호 알림
+
+on:
+  schedule:
+    # 프리마켓: EDT 04:00~09:30 = UTC 08:00~13:30 (KST 17:00~22:30)
+    - cron: '*/15 8-13 * * 1-5'
+    # 애프터마켓: EDT 16:00~20:00 = UTC 20:00~24:00 (KST 05:00~09:00 +1d)
+    - cron: '*/15 20-23 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  semi-extended:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests
+
+      - name: 중복 방지 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .semi_extended_seen.json
+          key: semi-extended-seen-${{ github.run_id }}
+          restore-keys: |
+            semi-extended-seen-
+
+      - name: 반도체주 프리/애프터마켓 신호 체크
+        env:
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
+        run: python tests/semi_extended_hours_alert.py

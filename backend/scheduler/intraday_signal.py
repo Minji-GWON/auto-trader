@@ -26,11 +26,11 @@ _COOLDOWN_MINUTES = 60
 
 # ── 데이터 수집 ────────────────────────────────────────────
 
-def fetch_15min(ticker: str) -> pd.DataFrame:
-    """15분봉 OHLCV 조회 (최근 5거래일)."""
+def fetch_15min(ticker: str, prepost: bool = False) -> pd.DataFrame:
+    """15분봉 OHLCV 조회 (최근 5거래일). prepost=True면 프리/애프터마켓 포함."""
     try:
         raw = yf.download(ticker, period="5d", interval="15m",
-                          progress=False, auto_adjust=True)
+                          progress=False, auto_adjust=True, prepost=prepost)
         if raw is None or raw.empty:
             return pd.DataFrame()
 
@@ -49,22 +49,22 @@ def fetch_15min(ticker: str) -> pd.DataFrame:
 
 # ── 중복 방지 ──────────────────────────────────────────────
 
-def _load_seen() -> dict:
-    if SEEN_FILE.exists():
+def _load_seen(seen_file: Path) -> dict:
+    if seen_file.exists():
         try:
-            return json.loads(SEEN_FILE.read_text())
+            return json.loads(seen_file.read_text())
         except Exception:
             pass
     return {}
 
 
-def _save_seen(seen: dict):
-    SEEN_FILE.write_text(json.dumps(seen))
+def _save_seen(seen_file: Path, seen: dict):
+    seen_file.write_text(json.dumps(seen))
 
 
-def _is_duplicate(ticker: str, signal: str) -> bool:
+def _is_duplicate(ticker: str, signal: str, seen_file: Path) -> bool:
     """같은 방향 신호가 cooldown 내에 이미 발송됐으면 True."""
-    seen = _load_seen()
+    seen = _load_seen(seen_file)
     key = f"{ticker}_{signal}"
     last_str = seen.get(key)
     if not last_str:
@@ -73,10 +73,10 @@ def _is_duplicate(ticker: str, signal: str) -> bool:
     return (datetime.now(timezone.utc) - last) < timedelta(minutes=_COOLDOWN_MINUTES)
 
 
-def _mark_seen(ticker: str, signal: str):
-    seen = _load_seen()
+def _mark_seen(ticker: str, signal: str, seen_file: Path):
+    seen = _load_seen(seen_file)
     seen[f"{ticker}_{signal}"] = datetime.now(timezone.utc).isoformat()
-    _save_seen(seen)
+    _save_seen(seen_file, seen)
 
 
 # ── 신호 체크 ──────────────────────────────────────────────
@@ -90,6 +90,7 @@ def check_intraday_signal(
     bb_std_dev: float = 2.0,
     ma_short: int = 10,
     ma_long: int = 20,
+    prepost: bool = False,
 ) -> dict | None:
     """
     15분봉 기준 매수/매도 신호 확인.
@@ -99,7 +100,7 @@ def check_intraday_signal(
          "bb_position": str, "candle_time": str}
         또는 None (신호 없음 / 오류)
     """
-    df = fetch_15min(ticker)
+    df = fetch_15min(ticker, prepost=prepost)
     if df.empty or len(df) < max(rsi_period, bb_period, ma_long) + 5:
         return None
 
@@ -153,7 +154,7 @@ def check_intraday_signal(
 
 # ── 메시지 빌드 ────────────────────────────────────────────
 
-def build_alert(ticker: str, result: dict) -> str:
+def build_alert(ticker: str, result: dict, session_label: str = "") -> str:
     signal  = result["signal"]
     price   = result["price"]
     rsi     = result["rsi"]
@@ -169,8 +170,9 @@ def build_alert(ticker: str, result: dict) -> str:
         label = "매도 신호"
         tip   = "RSI 과매수 + 볼린저 상단 — 조정 구간"
 
+    session = f" [{session_label}]" if session_label else ""
     return (
-        f"{icon} <b>{ticker} {label}</b>  <code>{t} (EST)</code>\n"
+        f"{icon} <b>{ticker} {label}</b>{session}  <code>{t} (EST)</code>\n"
         f"현재가: <b>${price:,.2f}</b>  RSI: {rsi}  BB: {bb_pos}\n"
         f"<i>{tip}</i>"
     )
@@ -193,21 +195,24 @@ def run(
     token: str,
     chat_id: str,
     dry_run: bool = False,
+    prepost: bool = False,
+    seen_file: Path = SEEN_FILE,
+    session_label: str = "",
 ):
     for ticker in tickers:
-        result = check_intraday_signal(ticker)
+        result = check_intraday_signal(ticker, prepost=prepost)
         if result is None:
             print(f"[{ticker}] 신호 없음")
             continue
 
         signal = result["signal"]
-        if _is_duplicate(ticker, signal):
+        if _is_duplicate(ticker, signal, seen_file):
             print(f"[{ticker}] {signal} — 중복 (60분 내 발송됨), 스킵")
             continue
 
-        msg = build_alert(ticker, result)
+        msg = build_alert(ticker, result, session_label=session_label)
         print(f"[{ticker}] {signal} 신호 발송:\n{msg}\n")
 
         if not dry_run:
             _send(token, chat_id, msg)
-            _mark_seen(ticker, signal)
+            _mark_seen(ticker, signal, seen_file)
