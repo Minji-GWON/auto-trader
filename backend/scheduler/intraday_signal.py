@@ -154,7 +154,8 @@ def check_intraday_signal(
 
 # ── 메시지 빌드 ────────────────────────────────────────────
 
-def build_alert(ticker: str, result: dict, session_label: str = "") -> str:
+def build_alert(ticker: str, result: dict, session_label: str = "",
+                display_name: str = "") -> str:
     signal  = result["signal"]
     price   = result["price"]
     rsi     = result["rsi"]
@@ -170,9 +171,10 @@ def build_alert(ticker: str, result: dict, session_label: str = "") -> str:
         label = "매도 신호"
         tip   = "RSI 과매수 + 볼린저 상단 — 조정 구간"
 
+    name = display_name or ticker
     session = f" [{session_label}]" if session_label else ""
     return (
-        f"{icon} <b>{ticker} {label}</b>{session}  <code>{t} (EST)</code>\n"
+        f"{icon} <b>{name} {label}</b>{session}  <code>{t} (EST)</code>\n"
         f"현재가: <b>${price:,.2f}</b>  RSI: {rsi}  BB: {bb_pos}\n"
         f"<i>{tip}</i>"
     )
@@ -198,7 +200,9 @@ def run(
     prepost: bool = False,
     seen_file: Path = SEEN_FILE,
     session_label: str = "",
+    display_names: dict[str, str] | None = None,
 ):
+    names = display_names or {}
     for ticker in tickers:
         result = check_intraday_signal(ticker, prepost=prepost)
         if result is None:
@@ -210,7 +214,8 @@ def run(
             print(f"[{ticker}] {signal} — 중복 (60분 내 발송됨), 스킵")
             continue
 
-        msg = build_alert(ticker, result, session_label=session_label)
+        msg = build_alert(ticker, result, session_label=session_label,
+                          display_name=names.get(ticker, ""))
         print(f"[{ticker}] {signal} 신호 발송:\n{msg}\n")
 
         if not dry_run:

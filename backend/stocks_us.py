@@ -80,7 +80,18 @@ SEMI_TICKERS: list[str] = [
     "ARM",   # ARM
     "SMCI",  # 슈퍼마이크로
     "MRVL",  # 마벨
+    "SOXX",  # iShares 반도체 ETF (SOX 추종, 미장 외엔 거래 없음)
+    "SMH",   # VanEck 반도체 ETF
 ]
+
+
+# 미국 야간 지수선물 (CME GLOBEX, 미장 마감 후 ~ 다음날 프리마켓 전 거래)
+# 필라델피아 반도체 지수(SOX)는 선물이 존재하지 않아 제외 — NQ가 가장 가까운 프록시
+OVERNIGHT_FUTURES: dict[str, str] = {
+    "YM=F":  "다우 선물",
+    "NQ=F":  "나스닥 선물",
+    "RTY=F": "러셀2000 선물",
+}
 
 
 def get_us_name(ticker: str) -> str:

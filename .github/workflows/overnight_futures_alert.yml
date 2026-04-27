@@ -1,0 +1,41 @@
+name: 미국 야간 지수선물 신호 알림
+
+on:
+  schedule:
+    # 미장 마감 후 ~ 다음날 프리마켓 전 (KST 09:00~17:00 = UTC 00:00~08:00)
+    # = 미국 동부시간 약 19:00(전날) ~ 04:00 = 야간 트레이딩 세션
+    # 30분 간격으로 노이즈 절감 (밤새 알림 폭주 방지)
+    - cron: '*/30 0-8 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  overnight-futures:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4.2.2
+
+      - name: Python 설정
+        uses: actions/setup-python@v5.4.0
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install "yfinance==1.2.0" pandas numpy python-dotenv requests
+
+      - name: 중복 방지 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: .overnight_futures_seen.json
+          key: overnight-futures-seen-${{ github.run_id }}
+          restore-keys: |
+            overnight-futures-seen-
+
+      - name: 야간 선물 신호 체크
+        env:
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
+        run: python tests/overnight_futures_alert.py
