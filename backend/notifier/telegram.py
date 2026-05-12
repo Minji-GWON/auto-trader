@@ -26,6 +26,30 @@ def _escape_md(text) -> str:
     return re.sub(r'([_\*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 
+_STRATEGY_NAME_KO = {
+    "bb_rsi": "BB+RSI",
+    "donchian": "돈치안",
+    "vb": "변동성돌파",
+}
+
+
+def _format_strategy_label(strategy: str, strategy_params: dict = None) -> str:
+    """전략 코드 → 알림용 한글 라벨. 핵심 파라미터는 괄호로 부기."""
+    base = _STRATEGY_NAME_KO.get(strategy, strategy)
+    if not strategy_params:
+        return base
+    if strategy == "donchian":
+        e = strategy_params.get("dc_entry_period")
+        x = strategy_params.get("dc_exit_period")
+        if e and x:
+            return f"{base} ({e}/{x})"
+    if strategy == "vb":
+        k = strategy_params.get("vb_k")
+        if k is not None:
+            return f"{base} (K={k})"
+    return base
+
+
 class TelegramNotifier:
     """텔레그램으로 백테스트 결과 및 매매 시그널을 전송한다."""
 
@@ -79,6 +103,8 @@ class TelegramNotifier:
 
         period = params.get("period", "?")
         initial_capital = params.get("initial_capital", 0)
+        strategy = params.get("strategy", "bb_rsi")
+        strategy_label = _format_strategy_label(strategy, params.get("strategy_params"))
         total_return_pct = result_dict.get("total_return_pct", 0.0)
         mdd_pct = result_dict.get("mdd_pct", 0.0)
         trade_count = result_dict.get("trade_count", 0)
@@ -90,6 +116,7 @@ class TelegramNotifier:
 
         text = (
             f"📊 *백테스트 결과* — {_escape_md(ticker)}\n"
+            f"🎯 전략: {_escape_md(strategy_label)}\n"
             f"기간: {_escape_md(period)}  \\|  초기자본: {_escape_md(f'{initial_capital:,.0f}')}원\n"
             f"\n"
             f"✅ 수익률: {_escape_md(ret_str)}\n"
@@ -129,20 +156,25 @@ class TelegramNotifier:
         )
         self.send_message(text)
 
-    def send_daily_report(self, summary_rows: list) -> None:
+    def send_daily_report(self, summary_rows: list, strategy: str = None) -> None:
         """
         일괄 백테스트 결과 테이블을 전송한다.
 
         Args:
             summary_rows: batch_backtest.py 의 summary_rows 리스트
                           각 요소: {ticker, total_return_pct, mdd_pct, trade_count, ...}
+            strategy: 전략 코드(bb_rsi/donchian/vb). 주어지면 헤더에 표시.
         """
         if not self._enabled:
             return
         if not summary_rows:
             return
 
-        lines = ["📋 *일괄 백테스트 결과*", "종목 \\| 수익률 \\| MDD \\| 거래"]
+        if strategy:
+            header = f"📋 *일괄 백테스트 결과* — {_escape_md(_STRATEGY_NAME_KO.get(strategy, strategy))}"
+        else:
+            header = "📋 *일괄 백테스트 결과*"
+        lines = [header, "종목 \\| 수익률 \\| MDD \\| 거래"]
         for row in summary_rows:
             ticker = row.get("ticker", "?")
             ret = row.get("total_return_pct", 0.0)
