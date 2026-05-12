@@ -5,9 +5,12 @@
   진입(BUY)  : 직전 20일 최고가 상향 돌파
   청산(SELL) : 직전 10일 최저가 하향 이탈
 
-기존 BB+RSI 흐름과 독립적으로 동작한다. daily_signal_check(_us).py에서
-BB+RSI 알림 직후 별도 호출되어 별도 텔레그램 메시지로 전송된다.
+알림은 두 채널로 나뉜다 (기존 BB+RSI 패턴과 동일):
+  - 종합 리포트(send_donchian_report)        → 트레이드 보조지표 채널
+  - 개별 매수 알림(send_donchian_buy_alerts) → 차트 분석 채널 (종목당 1메시지)
 """
+
+import os
 
 from datetime import date
 
@@ -113,6 +116,52 @@ def send_donchian_report(
         lines.append("\n✅ 돈치안 돌파/이탈 종목 없음")
 
     notifier.send_message("\n".join(lines))
+
+
+def send_donchian_buy_alerts(
+    results: list[dict],
+    market_label: str,
+    is_korean: bool = True,
+    notifier: TelegramNotifier = None,
+) -> int:
+    """
+    매수 신호(BUY) 종목만 골라 종목당 한 개씩 개별 메시지로 전송.
+    차트 분석 채널 (CHART_BOT_CHANNEL_ID) 용도.
+
+    Returns:
+        실제 전송된 메시지 개수.
+    """
+    buy_list = [r for r in results if r["signal"] == BUY]
+    if not buy_list:
+        return 0
+
+    if notifier is None:
+        chart_chat_id = os.getenv("CHART_BOT_CHANNEL_ID", "").strip()
+        if not chart_chat_id:
+            return 0
+        notifier = TelegramNotifier(chat_id=chart_chat_id)
+
+    from backend.notifier.telegram import _escape_md
+
+    def _price_str(price: float) -> str:
+        if is_korean:
+            return f"{price:,.0f}원"
+        return f"${price:,.2f}"
+
+    sent = 0
+    for r in buy_list:
+        price_str = _escape_md(_price_str(r["price"]))
+        upper_str = _escape_md(_price_str(r["dc_upper"]))
+        text = (
+            f"🐢 *돈치안 매수 신호* \\({_escape_md(market_label)}\\)\n"
+            f"*{_escape_md(r['name'])}* \\({_escape_md(r['ticker'])}\\)\n"
+            f"가격: {price_str}\n"
+            f"20일 채널 상단 {upper_str} 돌파\n"
+            f"📅 {_escape_md(r['date'])}"
+        )
+        notifier.send_message(text)
+        sent += 1
+    return sent
 
 
 def print_donchian_report(results: list[dict], market_label: str) -> None:
