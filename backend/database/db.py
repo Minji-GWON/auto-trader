@@ -4,6 +4,7 @@ SQLite 기반 백테스트 결과 영속화 모듈.
 DB 파일 위치: 프로젝트 루트 auto_trader.db
 """
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     bb_std_dev      REAL,
     ma_short        INTEGER,
     ma_long         INTEGER,
+    strategy        TEXT    NOT NULL DEFAULT 'bb_rsi',
+    strategy_params TEXT,
     total_return_pct REAL,
     win_rate        REAL,
     mdd_pct         REAL,
@@ -112,10 +115,25 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_strategy_columns(conn: sqlite3.Connection) -> None:
+    """backtest_runs에 strategy / strategy_params 컬럼이 없으면 추가 (기존 row는 'bb_rsi'로 백필).
+
+    SQLite의 ALTER TABLE ADD COLUMN ... DEFAULT 'X' 는 기존 row에도 디폴트값을 채운다.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(backtest_runs)")}
+    if "strategy" not in existing:
+        conn.execute(
+            "ALTER TABLE backtest_runs ADD COLUMN strategy TEXT NOT NULL DEFAULT 'bb_rsi'"
+        )
+    if "strategy_params" not in existing:
+        conn.execute("ALTER TABLE backtest_runs ADD COLUMN strategy_params TEXT")
+
+
 def init_db() -> None:
     """테이블과 인덱스를 생성한다 (이미 있으면 건너뜀)."""
     with _connect() as conn:
         conn.executescript(_DDL)
+        _migrate_strategy_columns(conn)
 
 
 def save_backtest_run(
@@ -140,15 +158,23 @@ def save_backtest_run(
     """
     run_at = datetime.now(timezone.utc).isoformat()
     trades_df: pd.DataFrame = result_dict["trades_df"]
+    strategy = params.get("strategy", "bb_rsi")
+    strategy_params = params.get("strategy_params")
+    strategy_params_json = (
+        json.dumps(strategy_params, ensure_ascii=False)
+        if strategy_params is not None
+        else None
+    )
 
     with _connect() as conn:
         cursor = conn.execute(
             """INSERT INTO backtest_runs
                (ticker, start_date, end_date, period, initial_capital,
                 rsi_oversold, rsi_overbought, rsi_period, bb_period, bb_std_dev,
-                ma_short, ma_long, total_return_pct, win_rate, mdd_pct,
+                ma_short, ma_long, strategy, strategy_params,
+                total_return_pct, win_rate, mdd_pct,
                 trade_count, avg_hold_days, final_capital, run_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 ticker,
                 start_date,
@@ -162,6 +188,8 @@ def save_backtest_run(
                 params.get("bb_std_dev"),
                 params.get("ma_short"),
                 params.get("ma_long"),
+                strategy,
+                strategy_params_json,
                 result_dict["total_return_pct"],
                 result_dict["win_rate"],
                 result_dict["mdd_pct"],

@@ -15,8 +15,21 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.data_fetcher.fetcher import fetch_ohlcv, get_default_csv_path
-from backend.indicators.calculator import add_all_indicators
-from backend.strategy.signal import generate_signals, BUY, SELL, HOLD
+from backend.indicators.calculator import (
+    add_all_indicators,
+    add_donchian,
+    add_volatility_breakout,
+)
+from backend.strategy.signal import (
+    generate_signals,
+    BUY,
+    SELL,
+    HOLD,
+    STRATEGY_BB_RSI,
+    STRATEGY_DONCHIAN,
+    STRATEGY_VB,
+    VALID_STRATEGIES,
+)
 from backend.risk_manager.manager import RiskManager
 from backend.database import init_db, save_backtest_run
 
@@ -40,6 +53,10 @@ def run_backtest(
     ma_short: int = 20,
     ma_long: int = 60,
     swing_mode: bool = False,
+    strategy: str = STRATEGY_BB_RSI,
+    dc_entry_period: int = 20,
+    dc_exit_period: int = 10,
+    vb_k: float = 0.5,
     verbose: bool = True,
 ) -> dict:
     """
@@ -67,18 +84,34 @@ def run_backtest(
     if verbose:
         print(f"      {len(df)}개 봉 수집 완료 ({df.index[0].date()} ~ {df.index[-1].date()})")
 
-    # 2. 지표 계산
+    # 2. 지표 계산 (전략별)
     if verbose:
-        print("[2/4] 지표 계산 중...")
-    df = add_all_indicators(
-        df,
-        rsi_period=rsi_period,
-        bb_period=bb_period,
-        bb_std_dev=bb_std_dev,
-        ma_short=ma_short,
-        ma_long=ma_long,
-    )
-    df = generate_signals(df, rsi_oversold=rsi_oversold, rsi_overbought=rsi_overbought, swing_mode=swing_mode)
+        print(f"[2/4] 지표 계산 중... (strategy={strategy})")
+    if strategy == STRATEGY_BB_RSI:
+        df = add_all_indicators(
+            df,
+            rsi_period=rsi_period,
+            bb_period=bb_period,
+            bb_std_dev=bb_std_dev,
+            ma_short=ma_short,
+            ma_long=ma_long,
+        )
+        df = generate_signals(
+            df,
+            strategy=STRATEGY_BB_RSI,
+            rsi_oversold=rsi_oversold,
+            rsi_overbought=rsi_overbought,
+            swing_mode=swing_mode,
+        )
+    elif strategy == STRATEGY_DONCHIAN:
+        df = add_donchian(df, entry_period=dc_entry_period, exit_period=dc_exit_period)
+        df = generate_signals(df, strategy=STRATEGY_DONCHIAN)
+    elif strategy == STRATEGY_VB:
+        df = add_volatility_breakout(df, k=vb_k)
+        df = generate_signals(df, strategy=STRATEGY_VB)
+    else:
+        raise ValueError(f"알 수 없는 전략: {strategy}. 가능: {VALID_STRATEGIES}")
+
     df = df.dropna()
     if df.empty:
         raise ValueError(
@@ -89,8 +122,25 @@ def run_backtest(
     # 3. 백테스트 시뮬레이션
     if verbose:
         print("[3/4] 백테스트 시뮬레이션 중...")
+
+    if strategy == STRATEGY_VB:
+        trades, final_capital, equity_curve = _simulate_vb(df, initial_capital, risk)
+    else:
+        trades, final_capital, equity_curve = _simulate_close_to_close(
+            df, initial_capital, risk
+        )
+
+    # 결과 계산은 시뮬레이션 직후 공통 처리로 이어진다
+    return _summarize(trades, final_capital, initial_capital, equity_curve)
+
+
+def _simulate_close_to_close(df, initial_capital: float, risk: RiskManager):
+    """기존 종가-종가 시뮬레이션 (bb_rsi / donchian 공용).
+
+    BUY 시그널에 종가 진입, SELL/손절/익절에 종가 청산.
+    """
     capital = initial_capital
-    position = 0          # 보유 주식 수
+    position = 0
     entry_price = 0.0
     entry_date = None
     daily_loss = 0.0
@@ -189,9 +239,106 @@ def run_backtest(
             "exit_reason": "기간종료",
         })
 
-    # 4. 결과 계산
+    return trades, capital, equity_curve
+
+
+def _simulate_vb(df, initial_capital: float, risk: RiskManager):
+    """Larry Williams 변동성 돌파 시뮬레이션.
+
+    진입: 당일 high >= vb_target 인 봉에서 vb_target 가격에 매수.
+    청산: 진입한 다음 봉의 시가(open)에 무조건 매도. 손절/익절 미적용 (원전 룰).
+    """
+    capital = initial_capital
+    position = 0
+    entry_price = 0.0
+    entry_date = None
+    daily_loss = 0.0
+    last_date = None
+
+    trades = []
+    equity_curve = [initial_capital]
+
+    for date, row in df.iterrows():
+        price = row["close"]
+
+        if last_date is None or date.date() != last_date:
+            daily_loss = 0.0
+            last_date = date.date()
+
+        # --- 포지션 있을 때: 다음 봉이므로 시가에 무조건 청산 ---
+        if position > 0:
+            exit_price = row["open"]
+            proceeds = position * exit_price * (1 - TOTAL_COST_RATE)
+            pnl = proceeds - (position * entry_price * (1 + TOTAL_COST_RATE))
+            daily_loss += min(pnl, 0)
+            capital += proceeds
+
+            hold_days = (date - entry_date).days
+            trades.append({
+                "entry_date": entry_date,
+                "exit_date": date,
+                "entry_price": round(entry_price, 2),
+                "exit_price": round(exit_price, 2),
+                "shares": position,
+                "pnl": round(pnl, 0),
+                "pnl_pct": round((exit_price / entry_price - 1) * 100, 2),
+                "hold_days": hold_days,
+                "exit_reason": "익일시가",
+            })
+            position = 0
+            entry_price = 0.0
+            entry_date = None
+
+        current_equity = capital + position * price
+        equity_curve.append(current_equity)
+
+        # --- 포지션 없을 때: vb_target 돌파 시 진입 ---
+        if position == 0 and row["signal"] == BUY:
+            if risk.check_daily_limit(daily_loss):
+                continue
+
+            entry_target = row["vb_target"]
+            shares = risk.position_size(capital, entry_target)
+            if shares == 0:
+                continue
+
+            cost = shares * entry_target * (1 + TOTAL_COST_RATE)
+            if cost > capital:
+                shares = int(capital / (entry_target * (1 + TOTAL_COST_RATE)))
+                cost = shares * entry_target * (1 + TOTAL_COST_RATE)
+
+            if shares > 0:
+                capital -= cost
+                position = shares
+                entry_price = entry_target
+                entry_date = date
+
+    # 미청산 포지션: 마지막 종가로 강제 청산
+    if position > 0:
+        last_price = df["close"].iloc[-1]
+        last_date_dt = df.index[-1]
+        proceeds = position * last_price * (1 - TOTAL_COST_RATE)
+        pnl = proceeds - (position * entry_price * (1 + TOTAL_COST_RATE))
+        capital += proceeds
+        hold_days = (last_date_dt - entry_date).days
+        trades.append({
+            "entry_date": entry_date,
+            "exit_date": last_date_dt,
+            "entry_price": round(entry_price, 2),
+            "exit_price": round(last_price, 2),
+            "shares": position,
+            "pnl": round(pnl, 0),
+            "pnl_pct": round((last_price / entry_price - 1) * 100, 2),
+            "hold_days": hold_days,
+            "exit_reason": "기간종료",
+        })
+
+    return trades, capital, equity_curve
+
+
+def _summarize(trades, final_capital: float, initial_capital: float, equity_curve) -> dict:
+    """공통 결과 요약."""
     trades_df = pd.DataFrame(trades)
-    final_capital = capital
     total_return_pct = (final_capital / initial_capital - 1) * 100
 
     if len(trades_df) > 0:
@@ -201,7 +348,6 @@ def run_backtest(
         win_rate = 0.0
         avg_hold_days = 0.0
 
-    # MDD 계산
     equity_series = pd.Series(equity_curve, dtype="float64")
     rolling_max = equity_series.cummax()
     drawdown = (equity_series - rolling_max) / rolling_max
@@ -262,15 +408,38 @@ def resolve_csv_path(ticker: str, data_source: str, csv_path: str = None) -> str
     )
 
 
-def validate_inputs(period: str, capital: float, ma_short: int, ma_long: int):
+def _build_strategy_params(args) -> dict:
+    """전략별 파라미터 dict를 만들어 DB JSON 컬럼에 저장한다."""
+    if args.strategy == STRATEGY_BB_RSI:
+        return {
+            "rsi_oversold": args.rsi_oversold,
+            "rsi_overbought": args.rsi_overbought,
+            "rsi_period": args.rsi_period,
+            "bb_period": args.bb_period,
+            "bb_std_dev": args.bb_std_dev,
+            "ma_short": args.ma_short,
+            "ma_long": args.ma_long,
+        }
+    if args.strategy == STRATEGY_DONCHIAN:
+        return {
+            "dc_entry_period": args.dc_entry_period,
+            "dc_exit_period": args.dc_exit_period,
+        }
+    if args.strategy == STRATEGY_VB:
+        return {"vb_k": args.vb_k}
+    return {}
+
+
+def validate_inputs(period: str, capital: float, ma_short: int, ma_long: int, strategy: str = STRATEGY_BB_RSI):
     if capital <= 0:
         raise ValueError("초기 자본은 0보다 커야 합니다.")
     if not period.strip():
         raise ValueError("기간(period)을 비워둘 수 없습니다.")
-    if ma_short <= 0 or ma_long <= 0:
-        raise ValueError("이동평균 기간은 0보다 커야 합니다.")
-    if ma_short >= ma_long:
-        raise ValueError("ma_short는 ma_long보다 작아야 합니다.")
+    if strategy == STRATEGY_BB_RSI:
+        if ma_short <= 0 or ma_long <= 0:
+            raise ValueError("이동평균 기간은 0보다 커야 합니다.")
+        if ma_short >= ma_long:
+            raise ValueError("ma_short는 ma_long보다 작아야 합니다.")
 
 
 def main():
@@ -292,9 +461,18 @@ def main():
         choices=["auto", "alphavantage", "csv", "yfinance", "pykrx"],
         help="데이터 소스 (기본: auto)",
     )
+    parser.add_argument(
+        "--strategy",
+        default=STRATEGY_BB_RSI,
+        choices=list(VALID_STRATEGIES),
+        help="전략 (기본: bb_rsi)",
+    )
+    parser.add_argument("--dc-entry-period", type=int, default=20, help="돈치안 진입 채널 기간")
+    parser.add_argument("--dc-exit-period", type=int, default=10, help="돈치안 청산 채널 기간")
+    parser.add_argument("--vb-k", type=float, default=0.5, help="변동성 돌파 K값")
     args = parser.parse_args()
 
-    validate_inputs(args.period, args.capital, args.ma_short, args.ma_long)
+    validate_inputs(args.period, args.capital, args.ma_short, args.ma_long, args.strategy)
 
     try:
         result = run_backtest(
@@ -310,12 +488,17 @@ def main():
             bb_std_dev=args.bb_std_dev,
             ma_short=args.ma_short,
             ma_long=args.ma_long,
+            strategy=args.strategy,
+            dc_entry_period=args.dc_entry_period,
+            dc_exit_period=args.dc_exit_period,
+            vb_k=args.vb_k,
         )
     except ValueError as exc:
         print(f"\n백테스트 실행 실패: {exc}")
         sys.exit(1)
 
     init_db()
+    strategy_params = _build_strategy_params(args)
     params = {
         "period": args.period,
         "initial_capital": args.capital,
@@ -326,6 +509,8 @@ def main():
         "bb_std_dev": args.bb_std_dev,
         "ma_short": args.ma_short,
         "ma_long": args.ma_long,
+        "strategy": args.strategy,
+        "strategy_params": strategy_params,
     }
     run_id = save_backtest_run(
         ticker=args.ticker,
