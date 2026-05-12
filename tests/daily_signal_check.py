@@ -11,6 +11,7 @@ cron 등록 예시 (평일 16:10 실행):
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -103,6 +104,7 @@ def main():
         print("(dry-run: 텔레그램 미전송)")
 
     # ③ 돈치안 채널 돌파 신호 (BB+RSI와 독립적인 추세추종 전략)
+    #    → 트레이드 보조지표 채널이 아닌 차트 분석 채널(CHART_BOT_CHANNEL_ID)로 전송
     if not args.no_donchian:
         print(f"\n── 돈치안 채널 스캔 ({args.market.upper()} {len(tickers)}개) ──")
         dc_results = check_donchian_signals(
@@ -113,8 +115,14 @@ def main():
         )
         print_donchian_report(dc_results, market_label="한국")
         if not args.dry_run:
-            send_donchian_report(dc_results, market_label="한국", is_korean=True)
-            print("돈치안 알림 전송 완료")
+            chart_chat_id = os.getenv("CHART_BOT_CHANNEL_ID", "").strip()
+            if chart_chat_id:
+                chart_notifier = TelegramNotifier(chat_id=chart_chat_id)
+                send_donchian_report(dc_results, market_label="한국", is_korean=True,
+                                     notifier=chart_notifier)
+                print("돈치안 알림 전송 완료 (차트 분석 채널)")
+            else:
+                print("[경고] CHART_BOT_CHANNEL_ID 미설정 — 돈치안 알림 미전송")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ GitHub Actions 실행 시각:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from backend.scheduler.donchian_signal import (
     check_donchian_signals, send_donchian_report, print_donchian_report,
 )
 from backend.database import init_db
+from backend.notifier import TelegramNotifier
 
 
 def main():
@@ -76,6 +78,7 @@ def main():
         print("(dry-run: 텔레그램 미전송)")
 
     # ── 돈치안 채널 돌파 신호 (추세추종)
+    #    → 트레이드 보조지표 채널이 아닌 차트 분석 채널(CHART_BOT_CHANNEL_ID)로 전송
     if not args.no_donchian:
         print(f"\n── 돈치안 채널 스캔 (US {len(tickers)}개) ──")
         dc_results = check_donchian_signals(
@@ -86,8 +89,14 @@ def main():
         )
         print_donchian_report(dc_results, market_label="US")
         if not args.dry_run:
-            send_donchian_report(dc_results, market_label="US", is_korean=False)
-            print("돈치안 알림 전송 완료")
+            chart_chat_id = os.getenv("CHART_BOT_CHANNEL_ID", "").strip()
+            if chart_chat_id:
+                chart_notifier = TelegramNotifier(chat_id=chart_chat_id)
+                send_donchian_report(dc_results, market_label="US", is_korean=False,
+                                     notifier=chart_notifier)
+                print("돈치안 알림 전송 완료 (차트 분석 채널)")
+            else:
+                print("[경고] CHART_BOT_CHANNEL_ID 미설정 — 돈치안 알림 미전송")
 
 
 if __name__ == "__main__":

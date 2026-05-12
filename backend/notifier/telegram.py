@@ -53,9 +53,15 @@ def _format_strategy_label(strategy: str, strategy_params: dict = None) -> str:
 class TelegramNotifier:
     """텔레그램으로 백테스트 결과 및 매매 시그널을 전송한다."""
 
-    def __init__(self):
+    def __init__(self, chat_id: str = None):
+        """
+        Args:
+            chat_id: 전송할 채널 ID. None이면 .env의 TELEGRAM_CHAT_ID를 사용한다.
+                     별도 채널로 보내고 싶을 때 명시적으로 다른 ID를 전달.
+        """
         self._token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        self._chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        env_chat = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        self._chat_id = (chat_id or env_chat).strip() if (chat_id or env_chat) else ""
         self._enabled = bool(self._token and self._chat_id)
         self._url = _API_BASE.format(token=self._token)
 
