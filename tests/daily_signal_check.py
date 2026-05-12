@@ -28,6 +28,9 @@ from backend.scheduler.donchian_signal import (
     check_donchian_signals, send_donchian_report, send_donchian_buy_alerts,
     print_donchian_report,
 )
+from backend.scheduler.confluence_signal import (
+    find_confluence_signals, send_confluence_report, print_confluence_report,
+)
 from backend.database import init_db
 from backend.notifier import TelegramNotifier
 
@@ -130,6 +133,13 @@ def main():
                 print(f"돈치안 개별 매수 알림 {sent}건 전송 (차트 분석 채널)")
             else:
                 print("[경고] CHART_BOT_CHANNEL_ID 미설정 — 개별 매수 알림 미전송")
+
+        # ④ 강한 신호 — BB+RSI와 돈치안 양쪽이 일치하는 종목 (보조지표 채널)
+        matches = find_confluence_signals(results, dc_results)
+        print_confluence_report(matches, market_label="한국")
+        if not args.dry_run:
+            send_confluence_report(matches, market_label="한국", is_korean=True)
+            print("강한 신호(일치) 알림 전송 완료")
 
 
 if __name__ == "__main__":
