@@ -17,11 +17,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.stocks_us import US_STOCKS
+from backend.stocks_us import US_STOCKS, get_us_name
 from backend.scheduler.signal_checker_us import (
     get_market_trend_us, print_market_trend_us,
     check_signals_today_us, send_signal_report_us,
     print_report_us,
+)
+from backend.scheduler.donchian_signal import (
+    check_donchian_signals, send_donchian_report, print_donchian_report,
 )
 from backend.database import init_db
 
@@ -36,6 +39,9 @@ def main():
     parser.add_argument("--ma-long",       type=int,   default=30)
     parser.add_argument("--no-swing",      action="store_true", help="스윙 모드 OFF")
     parser.add_argument("--dry-run",       action="store_true", help="텔레그램 미전송")
+    parser.add_argument("--no-donchian",   action="store_true", help="돈치안 채널 신호 체크 OFF (기본: ON)")
+    parser.add_argument("--dc-entry-period", type=int, default=20)
+    parser.add_argument("--dc-exit-period", type=int, default=10)
     args = parser.parse_args()
 
     tickers = [ticker for ticker, _ in US_STOCKS]
@@ -68,6 +74,20 @@ def main():
         print("텔레그램 알림 전송 완료")
     else:
         print("(dry-run: 텔레그램 미전송)")
+
+    # ── 돈치안 채널 돌파 신호 (추세추종)
+    if not args.no_donchian:
+        print(f"\n── 돈치안 채널 스캔 (US {len(tickers)}개) ──")
+        dc_results = check_donchian_signals(
+            tickers=tickers,
+            entry_period=args.dc_entry_period,
+            exit_period=args.dc_exit_period,
+            name_resolver=get_us_name,
+        )
+        print_donchian_report(dc_results, market_label="US")
+        if not args.dry_run:
+            send_donchian_report(dc_results, market_label="US", is_korean=False)
+            print("돈치안 알림 전송 완료")
 
 
 if __name__ == "__main__":

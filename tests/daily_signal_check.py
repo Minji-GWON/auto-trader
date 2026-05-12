@@ -17,11 +17,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.stocks import KOSPI_MAJOR, KOSDAQ_MAJOR
+from backend.stocks import KOSPI_MAJOR, KOSDAQ_MAJOR, get_name
 from backend.scheduler.signal_checker import (
     get_market_trend, print_market_trend,
     check_signals_today, send_signal_report, print_report,
     check_my_positions, send_position_report,
+)
+from backend.scheduler.donchian_signal import (
+    check_donchian_signals, send_donchian_report, print_donchian_report,
 )
 from backend.database import init_db
 from backend.notifier import TelegramNotifier
@@ -43,6 +46,9 @@ def main():
     parser.add_argument("--ma-long", type=int, default=30)
     parser.add_argument("--no-swing", action="store_true", help="스윙 모드 OFF (기본: ON)")
     parser.add_argument("--dry-run", action="store_true", help="텔레그램 미전송, 터미널만 출력")
+    parser.add_argument("--no-donchian", action="store_true", help="돈치안 채널 신호 체크 OFF (기본: ON)")
+    parser.add_argument("--dc-entry-period", type=int, default=20)
+    parser.add_argument("--dc-exit-period", type=int, default=10)
     args = parser.parse_args()
 
     if args.market == "kospi":
@@ -95,6 +101,20 @@ def main():
         print("텔레그램 알림 전송 완료")
     else:
         print("(dry-run: 텔레그램 미전송)")
+
+    # ③ 돈치안 채널 돌파 신호 (BB+RSI와 독립적인 추세추종 전략)
+    if not args.no_donchian:
+        print(f"\n── 돈치안 채널 스캔 ({args.market.upper()} {len(tickers)}개) ──")
+        dc_results = check_donchian_signals(
+            tickers=tickers,
+            entry_period=args.dc_entry_period,
+            exit_period=args.dc_exit_period,
+            name_resolver=get_name,
+        )
+        print_donchian_report(dc_results, market_label="한국")
+        if not args.dry_run:
+            send_donchian_report(dc_results, market_label="한국", is_korean=True)
+            print("돈치안 알림 전송 완료")
 
 
 if __name__ == "__main__":
