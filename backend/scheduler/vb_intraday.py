@@ -8,7 +8,7 @@ Larry Williams 변동성 돌파 — 장중 감시.
 청산(익일 시가)은 자동 알림하지 않는다 — 진입 알림만 담당한다.
 
 기존 intraday_signal.py (RSI+BB 15분봉)와 독립적으로 동작한다.
-nvda_intraday_alert.py에서 RSI+BB 체크 직후 본 모듈을 호출한다.
+msft_intraday_alert.py에서 RSI+BB 체크 직후 본 모듈을 호출한다.
 """
 
 from __future__ import annotations

@@ -23,7 +23,7 @@ load_dotenv(override=True)
 from backend.scheduler.stock_news_alert import run, SEEN_FILE_TPL
 
 # 알림 받을 종목 목록
-TICKERS = ["NVDA"]
+TICKERS = ["MSFT"]
 
 
 def main() -> None:

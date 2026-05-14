@@ -28,10 +28,10 @@ jobs:
       - name: seen 캐시 복원
         uses: actions/cache@v4
         with:
-          path: .stock_news_seen_nvda.txt
-          key: stock-news-seen-nvda-${{ github.run_id }}
+          path: .stock_news_seen_msft.txt
+          key: stock-news-seen-msft-${{ github.run_id }}
           restore-keys: |
-            stock-news-seen-nvda-
+            stock-news-seen-msft-
 
       - name: 호재 뉴스 알림 실행
         env:

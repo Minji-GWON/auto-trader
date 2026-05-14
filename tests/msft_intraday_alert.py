@@ -1,11 +1,11 @@
 """
-NVDA 장중 15분봉 매수/매도 신호 알림 실행 스크립트.
+MSFT 장중 15분봉 매수/매도 신호 알림 실행 스크립트.
 
 사용법:
-    python tests/nvda_intraday_alert.py             # 실제 전송
-    python tests/nvda_intraday_alert.py --dry-run   # 터미널만 출력
-    python tests/nvda_intraday_alert.py --reset      # 중복 방지 캐시 초기화
-    python tests/nvda_intraday_alert.py --tickers NVDA TSLA AAPL
+    python tests/msft_intraday_alert.py             # 실제 전송
+    python tests/msft_intraday_alert.py --dry-run   # 터미널만 출력
+    python tests/msft_intraday_alert.py --reset      # 중복 방지 캐시 초기화
+    python tests/msft_intraday_alert.py --tickers MSFT AAPL
 """
 
 import argparse
@@ -24,11 +24,11 @@ from backend.scheduler.vb_intraday import VB_SEEN_FILE, run_vb
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NVDA 장중 신호 알림")
+    parser = argparse.ArgumentParser(description="MSFT 장중 신호 알림")
     parser.add_argument("--dry-run",  action="store_true", help="텔레그램 미전송")
     parser.add_argument("--reset",    action="store_true", help="중복 방지 캐시 초기화")
-    parser.add_argument("--tickers",  nargs="+", default=["NVDA"],
-                        help="티커 목록 (기본값: NVDA)")
+    parser.add_argument("--tickers",  nargs="+", default=["MSFT"],
+                        help="티커 목록 (기본값: MSFT)")
     parser.add_argument("--no-vb",    action="store_true",
                         help="변동성 돌파 신호 OFF (기본: ON)")
     parser.add_argument("--vb-k",     type=float, default=0.5,
