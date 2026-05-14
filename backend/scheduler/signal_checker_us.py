@@ -30,6 +30,9 @@ from backend.scheduler.finnhub_targets import get_analyst_summary
 
 _MIN_ROWS = 80
 
+# 텔레그램 메시지에 표시할 매수/매도 종목 최대 개수 (신뢰도 상위 N개)
+_TELEGRAM_TOP_N = 5
+
 
 # ──────────────────────────────────────────
 # 시장 흐름 (SPY 기준)
@@ -288,13 +291,21 @@ def send_signal_report_us(
         )
 
     if buy_list:
-        lines.append(f"\n🟢 *매수 신호 {len(buy_list)}개*")
-        for r in buy_list:
+        total = len(buy_list)
+        header = f"\n🟢 *매수 신호 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in buy_list[:_TELEGRAM_TOP_N]:
             lines.append(_signal_lines(r))
 
     if sell_list:
-        lines.append(f"\n🔴 *매도 신호 {len(sell_list)}개*")
-        for r in sell_list:
+        total = len(sell_list)
+        header = f"\n🔴 *매도 신호 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in sell_list[:_TELEGRAM_TOP_N]:
             lines.append(_signal_lines(r))
 
     if not buy_list and not sell_list:

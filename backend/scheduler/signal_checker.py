@@ -35,6 +35,9 @@ _VOL_STRONG  = 1.5   # 평균의 1.5배 이상 → 강한 거래량 확인
 _VOL_OK      = 0.8   # 평균의 0.8배 이상 → 정상
 _VOL_WEAK    = 0.5   # 평균의 0.5배 미만 → 거래량 부족 경고
 
+# 텔레그램 메시지에 표시할 매수/매도 종목 최대 개수 (신뢰도 상위 N개)
+_TELEGRAM_TOP_N = 5
+
 
 # ──────────────────────────────────────────
 # 시장 흐름 체크
@@ -300,13 +303,21 @@ def send_signal_report(
         )
 
     if buy_list:
-        lines.append(f"\n🟢 *매수 신호 {len(buy_list)}개*")
-        for r in buy_list:
+        total = len(buy_list)
+        header = f"\n🟢 *매수 신호 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in buy_list[:_TELEGRAM_TOP_N]:
             lines.append(_signal_lines(r))
 
     if sell_list:
-        lines.append(f"\n🔴 *매도 신호 {len(sell_list)}개*")
-        for r in sell_list:
+        total = len(sell_list)
+        header = f"\n🔴 *매도 신호 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in sell_list[:_TELEGRAM_TOP_N]:
             lines.append(_signal_lines(r))
 
     if not buy_list and not sell_list:
