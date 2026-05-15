@@ -1,8 +1,8 @@
 """
-프리/애프터마켓 매수/매도 신호 알림.
+반도체주 프리/애프터마켓 매수/매도 신호 알림.
 
 미장 정규시간 외(프리마켓 04:00~09:30 EST, 애프터마켓 16:00~20:00 EST)에
-지정한 종목들에 대해 15분봉 RSI+볼린저 신호 체크.
+SEMI_TICKERS의 종목들에 대해 15분봉 RSI+볼린저 신호 체크.
 
 세션 라벨은 현재 UTC 시간으로 자동 판단:
   - UTC 8~13   → "프리마켓"
@@ -11,7 +11,7 @@
 사용법:
     python tests/semi_extended_hours_alert.py
     python tests/semi_extended_hours_alert.py --dry-run
-    python tests/semi_extended_hours_alert.py --tickers MSFT AAPL
+    python tests/semi_extended_hours_alert.py --tickers NVDA AMD
 """
 
 import argparse
@@ -29,7 +29,7 @@ load_dotenv(override=True)
 from backend.scheduler.intraday_signal import run
 
 SEEN_FILE = Path(".semi_extended_seen.json")
-_DEFAULT_TICKERS = ["MSFT"]
+_DEFAULT_TICKERS = ["NVDA"]
 
 
 def _session_label() -> str:
@@ -43,11 +43,11 @@ def _session_label() -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="프리/애프터마켓 신호 알림")
+    parser = argparse.ArgumentParser(description="반도체주 프리/애프터마켓 신호 알림")
     parser.add_argument("--dry-run", action="store_true", help="텔레그램 미전송")
     parser.add_argument("--reset",   action="store_true", help="중복 방지 캐시 초기화")
     parser.add_argument("--tickers", nargs="+", default=_DEFAULT_TICKERS,
-                        help="티커 목록 (기본값: MSFT)")
+                        help="티커 목록 (기본값: NVDA)")
     args = parser.parse_args()
 
     if args.reset and SEEN_FILE.exists():

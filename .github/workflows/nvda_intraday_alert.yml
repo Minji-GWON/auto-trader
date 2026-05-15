@@ -1,4 +1,4 @@
-name: MSFT 장중 매수/매도 신호 알림
+name: NVDA 장중 매수/매도 신호 알림
 
 on:
   schedule:
@@ -34,8 +34,8 @@ jobs:
           restore-keys: |
             intraday-seen-
 
-      - name: MSFT 장중 신호 체크
+      - name: NVDA 장중 신호 체크
         env:
           TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
-        run: python tests/msft_intraday_alert.py
+        run: python tests/nvda_intraday_alert.py

@@ -1,4 +1,4 @@
-name: MSFT 프리/애프터마켓 신호 알림
+name: 반도체주 프리/애프터마켓 신호 알림
 
 on:
   schedule:
@@ -34,7 +34,7 @@ jobs:
           restore-keys: |
             semi-extended-seen-
 
-      - name: MSFT 프리/애프터마켓 신호 체크
+      - name: 반도체주 프리/애프터마켓 신호 체크
         env:
           TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHART_BOT_CHANNEL_ID: ${{ secrets.CHART_BOT_CHANNEL_ID }}
