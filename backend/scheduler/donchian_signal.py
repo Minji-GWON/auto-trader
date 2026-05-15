@@ -22,6 +22,25 @@ from backend.notifier import TelegramNotifier
 
 _MIN_ROWS = 30  # entry_period(20) + 여유
 
+# 텔레그램 종합 메시지에 표시할 매수/매도 종목 최대 개수 (돌파/이탈 강도 상위 N개)
+_TELEGRAM_TOP_N = 5
+
+
+def _buy_strength(r: dict) -> float:
+    """매수 강도 = (close - 20일 상단) / 20일 상단. 클수록 강한 돌파."""
+    upper = r.get("dc_upper") or 0
+    if not upper:
+        return 0.0
+    return (r["price"] - upper) / upper
+
+
+def _sell_strength(r: dict) -> float:
+    """매도 강도 = (10일 하단 - close) / 10일 하단. 클수록 깊은 이탈."""
+    lower = r.get("dc_lower") or 0
+    if not lower:
+        return 0.0
+    return (lower - r["price"]) / lower
+
 
 def check_donchian_signals(
     tickers: list[str],
@@ -84,8 +103,15 @@ def send_donchian_report(
     today = date.today().strftime("%Y\\-%m\\-%d")
     lines = [f"🐢 *돈치안 채널 \\({_escape_md(market_label)}\\)* \\({today}\\)"]
 
-    buy_list = [r for r in results if r["signal"] == BUY]
-    sell_list = [r for r in results if r["signal"] == SELL]
+    # 돌파/이탈 강도 강한 순으로 정렬
+    buy_list = sorted(
+        [r for r in results if r["signal"] == BUY],
+        key=_buy_strength, reverse=True,
+    )
+    sell_list = sorted(
+        [r for r in results if r["signal"] == SELL],
+        key=_sell_strength, reverse=True,
+    )
 
     def _price_str(price: float) -> str:
         if is_korean:
@@ -93,8 +119,12 @@ def send_donchian_report(
         return f"${price:,.2f}"
 
     if buy_list:
-        lines.append(f"\n🟢 *상단 돌파 매수 {len(buy_list)}개*")
-        for r in buy_list:
+        total = len(buy_list)
+        header = f"\n🟢 *상단 돌파 매수 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in buy_list[:_TELEGRAM_TOP_N]:
             price_str = _escape_md(_price_str(r["price"]))
             upper_str = _escape_md(_price_str(r["dc_upper"]))
             lines.append(
@@ -103,8 +133,12 @@ def send_donchian_report(
             )
 
     if sell_list:
-        lines.append(f"\n🔴 *하단 이탈 매도 {len(sell_list)}개*")
-        for r in sell_list:
+        total = len(sell_list)
+        header = f"\n🔴 *하단 이탈 매도 {total}개*"
+        if total > _TELEGRAM_TOP_N:
+            header += f"  \\(상위 {_TELEGRAM_TOP_N}개\\)"
+        lines.append(header)
+        for r in sell_list[:_TELEGRAM_TOP_N]:
             price_str = _escape_md(_price_str(r["price"]))
             lower_str = _escape_md(_price_str(r["dc_lower"]))
             lines.append(
