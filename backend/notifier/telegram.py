@@ -28,7 +28,6 @@ def _escape_md(text) -> str:
 
 _STRATEGY_NAME_KO = {
     "bb_rsi": "BB+RSI",
-    "donchian": "돈치안",
     "vb": "변동성돌파",
 }
 
@@ -38,11 +37,6 @@ def _format_strategy_label(strategy: str, strategy_params: dict = None) -> str:
     base = _STRATEGY_NAME_KO.get(strategy, strategy)
     if not strategy_params:
         return base
-    if strategy == "donchian":
-        e = strategy_params.get("dc_entry_period")
-        x = strategy_params.get("dc_exit_period")
-        if e and x:
-            return f"{base} ({e}/{x})"
     if strategy == "vb":
         k = strategy_params.get("vb_k")
         if k is not None:
@@ -169,7 +163,7 @@ class TelegramNotifier:
         Args:
             summary_rows: batch_backtest.py 의 summary_rows 리스트
                           각 요소: {ticker, total_return_pct, mdd_pct, trade_count, ...}
-            strategy: 전략 코드(bb_rsi/donchian/vb). 주어지면 헤더에 표시.
+            strategy: 전략 코드(bb_rsi/vb). 주어지면 헤더에 표시.
         """
         if not self._enabled:
             return

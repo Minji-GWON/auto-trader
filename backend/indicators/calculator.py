@@ -36,22 +36,6 @@ def add_moving_averages(
     return df
 
 
-def add_donchian(
-    df: pd.DataFrame, entry_period: int = 20, exit_period: int = 10
-) -> pd.DataFrame:
-    """
-    돈치안 채널 계산 후 dc_upper, dc_lower, dc_mid, dc_exit_lower 컬럼 추가.
-
-    터틀룰 표준: 진입 20일 채널 상단 돌파 시 매수, 청산 10일 채널 하단 이탈 시 매도.
-    현재 봉 자신을 채널에 포함하면 매번 자기 자신을 돌파하므로 shift(1)로 직전 봉까지만 본다.
-    """
-    df["dc_upper"] = df["high"].rolling(window=entry_period).max().shift(1)
-    df["dc_lower"] = df["low"].rolling(window=entry_period).min().shift(1)
-    df["dc_mid"] = (df["dc_upper"] + df["dc_lower"]) / 2
-    df["dc_exit_lower"] = df["low"].rolling(window=exit_period).min().shift(1)
-    return df
-
-
 def add_volatility_breakout(df: pd.DataFrame, k: float = 0.5) -> pd.DataFrame:
     """
     Larry Williams 변동성 돌파 계산 후 vb_range, vb_target 컬럼 추가.

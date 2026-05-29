@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.data_fetcher.fetcher import fetch_ohlcv, get_default_csv_path
 from backend.indicators.calculator import (
     add_all_indicators,
-    add_donchian,
     add_volatility_breakout,
 )
 from backend.strategy.signal import (
@@ -26,7 +25,6 @@ from backend.strategy.signal import (
     SELL,
     HOLD,
     STRATEGY_BB_RSI,
-    STRATEGY_DONCHIAN,
     STRATEGY_VB,
     VALID_STRATEGIES,
 )
@@ -54,8 +52,6 @@ def run_backtest(
     ma_long: int = 60,
     swing_mode: bool = False,
     strategy: str = STRATEGY_BB_RSI,
-    dc_entry_period: int = 20,
-    dc_exit_period: int = 10,
     vb_k: float = 0.5,
     verbose: bool = True,
 ) -> dict:
@@ -103,9 +99,6 @@ def run_backtest(
             rsi_overbought=rsi_overbought,
             swing_mode=swing_mode,
         )
-    elif strategy == STRATEGY_DONCHIAN:
-        df = add_donchian(df, entry_period=dc_entry_period, exit_period=dc_exit_period)
-        df = generate_signals(df, strategy=STRATEGY_DONCHIAN)
     elif strategy == STRATEGY_VB:
         df = add_volatility_breakout(df, k=vb_k)
         df = generate_signals(df, strategy=STRATEGY_VB)
@@ -135,7 +128,7 @@ def run_backtest(
 
 
 def _simulate_close_to_close(df, initial_capital: float, risk: RiskManager):
-    """기존 종가-종가 시뮬레이션 (bb_rsi / donchian 공용).
+    """기존 종가-종가 시뮬레이션 (bb_rsi 전략용).
 
     BUY 시그널에 종가 진입, SELL/손절/익절에 종가 청산.
     """
@@ -420,11 +413,6 @@ def _build_strategy_params(args) -> dict:
             "ma_short": args.ma_short,
             "ma_long": args.ma_long,
         }
-    if args.strategy == STRATEGY_DONCHIAN:
-        return {
-            "dc_entry_period": args.dc_entry_period,
-            "dc_exit_period": args.dc_exit_period,
-        }
     if args.strategy == STRATEGY_VB:
         return {"vb_k": args.vb_k}
     return {}
@@ -467,8 +455,6 @@ def main():
         choices=list(VALID_STRATEGIES),
         help="전략 (기본: bb_rsi)",
     )
-    parser.add_argument("--dc-entry-period", type=int, default=20, help="돈치안 진입 채널 기간")
-    parser.add_argument("--dc-exit-period", type=int, default=10, help="돈치안 청산 채널 기간")
     parser.add_argument("--vb-k", type=float, default=0.5, help="변동성 돌파 K값")
     args = parser.parse_args()
 
@@ -489,8 +475,6 @@ def main():
             ma_short=args.ma_short,
             ma_long=args.ma_long,
             strategy=args.strategy,
-            dc_entry_period=args.dc_entry_period,
-            dc_exit_period=args.dc_exit_period,
             vb_k=args.vb_k,
         )
     except ValueError as exc:
