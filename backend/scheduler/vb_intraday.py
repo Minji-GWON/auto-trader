@@ -3,12 +3,9 @@ Larry Williams 변동성 돌파 — 장중 감시.
 
 룰:
   vb_target = 오늘 시가(일봉) + K * 전일 변동폭(전일 high - 전일 low)
-  당일 중 vb_target 가격을 상향 돌파(고가 ≥ target)하면 BUY 알림.
-
-청산(익일 시가)은 자동 알림하지 않는다 — 진입 알림만 담당한다.
+  당일 중 vb_target 가격을 상향 돌파(고가 ≥ target)하면 감지한다.
 
 기존 intraday_signal.py (RSI+BB 15분봉)와 독립적으로 동작한다.
-nvda_intraday_alert.py에서 RSI+BB 체크 직후 본 모듈을 호출한다.
 """
 
 from __future__ import annotations
@@ -18,13 +15,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pandas as pd
-import requests
 import yfinance as yf
 
 
-# RSI+BB SEEN_FILE과 분리 (같은 날 두 번 알림 가지 않도록 24h cooldown)
+# RSI+BB SEEN_FILE과 분리 (같은 날 두 번 출력되지 않도록 cooldown)
 VB_SEEN_FILE = Path(".vb_intraday_seen.json")
-_VB_COOLDOWN_HOURS = 20  # 1거래일 안에는 같은 종목 중복 알림 금지
+_VB_COOLDOWN_HOURS = 20  # 1거래일 안에는 같은 종목 중복 처리 금지
 
 
 def _fetch_daily(ticker: str) -> pd.DataFrame:
@@ -108,32 +104,9 @@ def _mark_seen(ticker: str, seen_file: Path) -> None:
     _save_seen(seen_file, seen)
 
 
-def build_vb_alert(result: dict, display_name: str = "") -> str:
-    name = display_name or result["ticker"]
-    return (
-        f"⚡ <b>{name} 변동성 돌파</b>  <i>(Larry Williams, K={result['k']})</i>\n"
-        f"돌파선: <b>${result['vb_target']:,.2f}</b>  "
-        f"당일 고가: <b>${result['today_high']:,.2f}</b>\n"
-        f"시가: ${result['today_open']:,.2f}  "
-        f"전일 변동폭: ${result['prev_range']:,.2f}\n"
-        f"<i>표준 룰: 익일 시가에 청산</i>"
-    )
-
-
-def _send(token: str, chat_id: str, text: str) -> None:
-    requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-        timeout=10,
-    )
-
-
 def run_vb(
     tickers: list[str],
-    token: str,
-    chat_id: str,
     k: float = 0.5,
-    dry_run: bool = False,
     seen_file: Path = VB_SEEN_FILE,
     display_names: dict[str, str] | None = None,
 ) -> None:
@@ -145,12 +118,16 @@ def run_vb(
             continue
 
         if _is_duplicate(ticker, seen_file):
-            print(f"[{ticker}] VB: 오늘 이미 알림 발송됨, 스킵")
+            print(f"[{ticker}] VB: 오늘 이미 감지됨, 스킵")
             continue
 
-        msg = build_vb_alert(result, display_name=names.get(ticker, ""))
-        print(f"[{ticker}] VB 돌파 알림:\n{msg}\n")
-
-        if not dry_run:
-            _send(token, chat_id, msg)
-            _mark_seen(ticker, seen_file)
+        name = names.get(ticker, "") or ticker
+        print(
+            f"[{ticker}] VB 돌파 감지: {name} "
+            f"target=${result['vb_target']:,.2f}, "
+            f"high=${result['today_high']:,.2f}, "
+            f"open=${result['today_open']:,.2f}, "
+            f"prev_range=${result['prev_range']:,.2f}, "
+            f"k={result['k']}"
+        )
+        _mark_seen(ticker, seen_file)
